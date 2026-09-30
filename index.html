@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Maya</title>
+<style>
+:root{
+  --bg:#0a0f1e; --panel:#141b2f; --panel2:#1a2340; --line:#27304a;
+  --text:#eef1fa; --mute:#8a93ad; --accent:#4c7dff; --warn:#ff9500; --ok:#22c55e;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+  font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+#app{max-width:480px;margin:0 auto;height:100%;position:relative;overflow:hidden;
+  padding-top:env(safe-area-inset-top,0px);background:
+  radial-gradient(120% 60% at 50% 35%,#16234d 0%,var(--bg) 70%)}
+.hide{display:none!important}
+
+/* ---------- onboarding ---------- */
+#onb{position:absolute;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;padding:16px 18px calc(16px + env(safe-area-inset-bottom,0px))}
+.onb-head{display:flex;align-items:center;gap:12px}
+.onb-head img,.logo{width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#4c7dff,#c05cf0);display:grid;place-items:center;font-weight:800}
+.onb-head h1{margin:0;font-size:20px}
+.onb-head p{margin:0;color:var(--mute);font-size:14px}
+.bars{display:flex;gap:6px;margin:16px 0 20px}
+.bars i{flex:1;height:4px;border-radius:4px;background:var(--line)}
+.bars i.on{background:var(--accent)}
+.onb-body{flex:1;overflow:auto}
+.onb-body h2{font-size:26px;margin:0 0 6px}
+.onb-body .sub{color:var(--mute);margin:0 0 16px;line-height:1.4}
+.row{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px;width:100%;text-align:left}
+.row .ic{width:40px;height:40px;border-radius:50%;background:var(--panel2);display:grid;place-items:center;flex:none;font-size:18px}
+.row b{display:block;font-size:16px}
+.row small{color:var(--mute);line-height:1.35;display:block;margin-top:2px}
+.row .tx{flex:1}
+.tag{font-size:13px;font-weight:600;padding:6px 10px;border-radius:999px;flex:none}
+.tag.pending{background:#3a2a14;color:var(--warn)}
+.tag.ok{background:#12301f;color:var(--ok)}
+.tag.native{background:#232a40;color:var(--mute)}
+.btn{width:100%;padding:16px;border-radius:14px;font-weight:700;font-size:17px;margin-top:10px}
+.btn.primary{background:var(--accent);color:#fff}
+.btn.ghost{border:1px solid var(--line);color:var(--text)}
+.btn[disabled]{opacity:.45;pointer-events:none}
+.note{text-align:center;color:var(--mute);font-size:14px;margin:8px 0 0}
+input.field{width:100%;padding:16px;border-radius:14px;background:var(--panel);border:1px solid var(--line);color:var(--text);font-size:17px;margin-bottom:12px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{padding:10px 16px;border-radius:999px;border:1px solid var(--line);background:var(--panel)}
+.chip.sel{background:var(--accent);border-color:var(--accent)}
+
+/* ---------- main shell ---------- */
+#main{position:absolute;inset:0;display:flex;flex-direction:column}
+.views{flex:1;overflow:auto;padding:0 16px 12px}
+.top{display:flex;align-items:center;justify-content:space-between;padding:14px 4px 10px}
+.top h1{margin:0;font-size:22px;flex:1;text-align:center}
+.bell{position:relative;width:40px;height:40px;display:grid;place-items:center;font-size:20px}
+.bell::after{content:"";position:absolute;top:6px;right:6px;width:9px;height:9px;border-radius:50%;background:var(--warn)}
+.banner{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px 14px}
+.banner .tx{flex:1;font-size:13px;color:var(--mute);line-height:1.35}
+.banner .tx b{display:block;color:var(--text);font-size:16px}
+.banner .act{color:var(--accent);font-weight:700;font-size:18px}
+.hello{display:flex;justify-content:space-between;align-items:flex-start;margin-top:16px}
+.hello .g{color:var(--mute);font-size:26px;font-weight:600}
+.hello .n{font-size:34px;font-weight:800;line-height:1.1}
+.hello p{color:var(--mute);margin:6px 0 0}
+.energy{border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:10px 14px;display:flex;gap:8px;align-items:center}
+.energy b{display:block;font-size:18px}
+.energy small{color:var(--mute)}
+
+/* orb */
+.orb-wrap{display:grid;place-items:center;margin:8px 0 14px}
+.orb{position:relative;width:min(78vw,320px);aspect-ratio:1;border-radius:50%;display:grid;place-items:center;cursor:pointer}
+.orb .ring{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(120,150,255,.25);
+  background:radial-gradient(circle at 50% 50%,rgba(76,125,255,.10),transparent 65%)}
+.orb .arc{position:absolute;inset:6%;border-radius:50%;
+  background:conic-gradient(from 0deg,rgba(255,255,255,.85) 0 18%,transparent 18% 72%,rgba(76,125,255,.8) 72% 82%,transparent 82%);
+  -webkit-mask:radial-gradient(circle,transparent 62%,#000 63% 67%,transparent 68%);
+          mask:radial-gradient(circle,transparent 62%,#000 63% 67%,transparent 68%);
+  animation:spin 14s linear infinite}
+.orb .arc.b{inset:14%;animation-duration:22s;animation-direction:reverse;opacity:.6}
+.orb .core{position:relative;text-align:center}
+.orb .core small{display:block;letter-spacing:.2em;font-size:10px;color:var(--mute)}
+.orb .core .m{font-size:clamp(34px,11vw,48px);font-weight:800;letter-spacing:.02em;
+  background:linear-gradient(90deg,#9db4ff,#fff 40%,#d86bd0);-webkit-background-clip:text;background-clip:text;color:transparent}
+.orb .core .q{font-size:10px;letter-spacing:.18em;color:var(--mute);margin-top:10px}
+.orb.listening .ring{animation:pulse 1.2s ease-in-out infinite;border-color:var(--accent)}
+.orb.listening .arc{animation-duration:3s}
+.orb.thinking .arc{animation-duration:1.4s}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{50%{transform:scale(1.04);box-shadow:0 0 40px rgba(76,125,255,.45)}}
+@media (prefers-reduced-motion:reduce){.orb .arc,.orb .ring{animation:none!important}}
+
+.quick{display:flex;gap:10px;margin-bottom:12px}
+.quick button{flex:1;padding:14px 6px;border-radius:14px;background:var(--panel);border:1px solid var(--line);font-weight:600;font-size:16px}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px}
+.card small{color:var(--mute);font-size:13px}
+.card .v{font-size:24px;font-weight:700;margin:6px 0 2px}
+.ask{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:6px 8px 6px 16px}
+.ask input{flex:1;background:none;border:0;outline:0;color:var(--text);font-size:17px;min-width:0;padding:10px 0}
+.ask button{width:40px;height:40px;border-radius:50%;font-size:18px;color:var(--mute)}
+
+/* bottom nav */
+nav{display:grid;grid-template-columns:1fr 1fr 84px 1fr 1fr;align-items:end;background:#0d1328;border-top:1px solid var(--line);padding:8px 4px calc(8px + env(safe-area-inset-bottom,0px))}
+nav button{display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--mute);font-size:13px;padding:6px}
+nav button .i{font-size:20px}
+nav button.on{color:var(--accent);font-weight:700}
+nav .mic{width:68px;height:68px;border-radius:50%;background:var(--accent);margin:-30px auto 0;display:grid;place-items:center;font-size:26px;border:4px solid #0d1328;box-shadow:0 6px 24px rgba(76,125,255,.45);color:#fff}
+.ph{display:grid;place-items:center;height:60vh;text-align:center;color:var(--mute);padding:0 24px;line-height:1.5}
+.toast{position:absolute;left:50%;bottom:110px;transform:translateX(-50%);background:#1f2a4d;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;z-index:40;max-width:86%;text-align:center}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ONBOARDING -->
+  <section id="onb">
+    <div class="onb-head"><div class="logo">M</div><div><h1>Set up Maya</h1><p id="onbStep">Step 1 of 3</p></div></div>
+    <div class="bars"><i></i><i></i><i></i></div>
+    <div class="onb-body" id="onbBody"></div>
+    <div id="onbFoot"></div>
+  </section>
+
+  <!-- MAIN -->
+  <section id="main" class="hide">
+    <div class="views">
+
+      <div id="view-home" class="view">
+        <div class="top"><span style="width:40px"></span><h1>Maya</h1><div class="bell">🔔</div></div>
+        <div class="banner">
+          <span>🔒</span>
+          <div class="tx"><b id="freeTxt">Free mode • 10:00 min left today</b>Activate a license for tools, PC link and unlimited talk</div>
+          <button class="act" id="activateBtn">Activate</button>
+        </div>
+        <div class="hello">
+          <div><div class="g" id="greet">Good morning,</div><div class="n" id="uname">there</div><p>Maya is ready to help you.</p></div>
+          <div class="energy">⚡<div><b id="energy">1</b><small>Energy</small></div></div>
+        </div>
+        <div class="orb-wrap">
+          <div class="orb" id="orb" role="button" aria-label="Talk to Maya">
+            <div class="ring"></div><div class="arc"></div><div class="arc b"></div>
+            <div class="core"><small>AI ASSISTANT</small><div class="m">M.A.Y.A</div><div class="q" id="orbState">HOW CAN I HELP YOU?</div></div>
+          </div>
+        </div>
+        <div class="quick">
+          <button data-go="music">🎵 Music</button>
+          <button data-go="study">📖 Study</button>
+          <button data-go="journal">✏️ Journal</button>
+        </div>
+        <div class="cards">
+          <div class="card"><small>☁️ Weather</small><div class="v" id="wTemp">—</div><small id="wNote">No data</small></div>
+          <div class="card"><small>📅 Today</small><div class="v" id="dDay">--</div><small id="dTxt">--</small></div>
+          <div class="card"><small>♥ Mood</small><div class="v" id="mood">Warm</div><small>All good</small></div>
+        </div>
+        <div class="ask"><button aria-label="Attach">📎</button><input id="askIn" placeholder="Ask Maya anything…"><button id="askSend" aria-label="Send">➤</button></div>
+      </div>
+
+      <div id="view-scan" class="view hide"><div class="ph">Scan — Part 2 mein aayega (camera se dekhna).</div></div>
+      <div id="view-mem" class="view hide"><div class="ph">Memories — Part 2 mein aayega.</div></div>
+      <div id="view-chat" class="view hide"><div class="ph">Chat — Part 2 mein aayega.</div></div>
+    </div>
+
+    <nav>
+      <button data-tab="home" class="on"><span class="i">🏠</span>Home</button>
+      <button data-tab="scan"><span class="i">⌖</span>Scan</button>
+      <button class="mic" id="micBtn" aria-label="Microphone">🎤</button>
+      <button data-tab="mem"><span class="i">🧠</span>Memories</button>
+      <button data-tab="chat"><span class="i">💬</span>Chat</button>
+    </nav>
+  </section>
+</div>
+
+<script>
+/* =========================================================
+   MAYA — PART 1  (UI + onboarding + home)
+   Part 2 is added at the marker at the bottom of this file.
+   ========================================================= */
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+const Maya = {
+  state: { name:'', lang:'hi-IN', onboarded:false, minutesLeft:10*60, energy:1, perms:{} },
+  hooks: {},            // Part 2 attaches handlers here
+  save(){ try{ localStorage.setItem('maya.state', JSON.stringify(this.state)); }catch(e){} },
+  load(){ try{ const s = JSON.parse(localStorage.getItem('maya.state')||'null'); if(s) Object.assign(this.state,s); }catch(e){} },
+  toast(msg){
+    const t = document.createElement('div'); t.className='toast'; t.textContent=msg;
+    $('#app').appendChild(t); setTimeout(()=>t.remove(), 2600);
+  },
+  setOrb(mode){             // 'idle' | 'listening' | 'thinking'
+    const o = $('#orb'); o.classList.remove('listening','thinking');
+    if(mode!=='idle') o.classList.add(mode);
+    $('#orbState').textContent = {idle:'HOW CAN I HELP YOU?',listening:'LISTENING…',thinking:'THINKING…'}[mode];
+  },
+  go(tab){
+    $$('.view').forEach(v=>v.classList.add('hide'));
+    $('#view-'+tab).classList.remove('hide');
+    $$('nav [data-tab]').forEach(b=>b.classList.toggle('on', b.dataset.tab===tab));
+    if(this.hooks['tab:'+tab]) this.hooks['tab:'+tab]();
+  }
+};
+
+/* ---------- permissions (only what a web app can really ask for) ---------- */
+const PERMS = [
+  {id:'mic',   ic:'🎙️', t:'Microphone', d:'So you can talk to Maya. Required.', req:true,
+    ask: async()=>{ const s=await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); }},
+  {id:'notif', ic:'🔔', t:'Notifications', d:"Maya's own reminders and alerts.",
+    ask: async()=>{ const r=await Notification.requestPermission(); if(r!=='granted') throw 0; }},
+  {id:'cam',   ic:'📷', t:'Camera', d:'So she can look at what you point the phone at.',
+    ask: async()=>{ const s=await navigator.mediaDevices.getUserMedia({video:true}); s.getTracks().forEach(t=>t.stop()); }},
+  {id:'loc',   ic:'📍', t:'Location', d:'Weather, navigation, and where you are.',
+    ask: ()=>new Promise((ok,no)=>navigator.geolocation.getCurrentPosition(ok,no,{timeout:15000}))},
+  {id:'files', ic:'🖼️', t:'Gallery & files', d:'Picked on demand with the attach button.', native:'On demand'},
+  {id:'call',  ic:'📞', t:'Phone calls', d:'Place a call for you.', native:'Native only'},
+  {id:'cont',  ic:'👤', t:'Contacts', d:'A name is enough — she looks up the number.', native:'Native only'},
+  {id:'sms',   ic:'💬', t:'SMS', d:'Send a text message.', native:'Native only'},
+  {id:'ans',   ic:'🎧', t:'Answer & manage calls', d:'Announce who is calling; answer or reject.', native:'Native only'},
+  {id:'bt',    ic:'🔵', t:'Bluetooth', d:'Her voice plays on your earbuds or speaker.', native:'Native only'},
+];
+const BG = [
+  {t:'Battery — no optimisation', d:'Keeps Maya alive when the screen is off.', ic:'🔋'},
+  {t:'Display over other apps', d:'Her orb floats on top of whatever you do.', ic:'🧩'},
+  {t:'Notification access', d:'Read WhatsApp messages and know who is calling.', ic:'🔔'},
+  {t:'Accessibility service', d:'Open apps, tap and read the screen for you.', ic:'♿'},
+  {t:'Default assistant', d:'Long-press power button to call her.', ic:'🎧'},
+];
+
+/* ---------- onboarding flow ---------- */
+let step = 1;
+function renderOnb(){
+  $('#onbStep').textContent = `Step ${step} of 3`;
+  $$('.bars i').forEach((b,i)=>b.classList.toggle('on', i<step));
+  const body=$('#onbBody'), foot=$('#onbFoot');
+
+  if(step===1){
+    body.innerHTML = `<h2>Hi, I'm Maya</h2><p class="sub">Tell me your name and the language you speak with me.</p>
+      <input class="field" id="nameIn" placeholder="Your name" value="${Maya.state.name}">
+      <div class="chips" id="langs">
+        ${[['hi-IN','हिन्दी'],['en-IN','English'],['ur-IN','اردو']].map(([c,n])=>`<button class="chip ${Maya.state.lang===c?'sel':''}" data-l="${c}">${n}</button>`).join('')}
+      </div>`;
+    foot.innerHTML = `<button class="btn primary" id="next">Continue</button>`;
+    $('#langs').onclick = e=>{ const b=e.target.closest('[data-l]'); if(!b) return;
+      Maya.state.lang=b.dataset.l; $$('#langs .chip').forEach(x=>x.classList.toggle('sel',x===b)); };
+    $('#next').onclick = ()=>{ Maya.state.name = $('#nameIn').value.trim(); Maya.save(); step=2; renderOnb(); };
+  }
+
+  if(step===2){
+    body.innerHTML = `<h2>Let Maya use your phone</h2><p class="sub">Only the microphone is required; the rest make her useful.</p>` +
+      PERMS.map(p=>`<button class="row" data-p="${p.id}"><div class="ic">${p.ic}</div>
+        <div class="tx"><b>${p.t}</b><small>${p.d}</small></div>
+        <span class="tag ${p.native?'native':(Maya.state.perms[p.id]?'ok':'pending')}" id="tag-${p.id}">${p.native||(Maya.state.perms[p.id]?'Allowed':'Pending')}</span></button>`).join('');
+    foot.innerHTML = `<button class="btn primary" id="all">✓ Allow all</button>
+      <button class="btn ghost" id="next" ${Maya.state.perms.mic?'':'disabled'}>Continue</button>
+      <p class="note" id="permNote">Continue unlocks once the microphone is allowed.</p>`;
+    body.onclick = e=>{ const r=e.target.closest('[data-p]'); if(r) askPerm(r.dataset.p); };
+    $('#all').onclick = async()=>{ for(const p of PERMS.filter(p=>!p.native)) await askPerm(p.id); };
+    $('#next').onclick = ()=>{ step=3; renderOnb(); };
+  }
+
+  if(step===3){
+    body.innerHTML = `<h2>Keep Maya alive in the background</h2>
+      <p class="sub">These are Android system switches. A web app can't turn them on — they work once this project is built into a real APK with native code.</p>` +
+      BG.map(p=>`<div class="row"><div class="ic">${p.ic}</div><div class="tx"><b>${p.t}</b><small>${p.d}</small></div><span class="tag native">Native only</span></div>`).join('');
+    foot.innerHTML = `<button class="btn primary" id="fin">✓ Finish</button>`;
+    $('#fin').onclick = ()=>{ Maya.state.onboarded=true; Maya.save(); startMain(); };
+  }
+}
+async function askPerm(id){
+  const p = PERMS.find(x=>x.id===id); if(!p || p.native) return;
+  try{ await p.ask(); Maya.state.perms[id]=true; }
+  catch(e){ Maya.state.perms[id]=false; if(id==='mic') Maya.toast('Microphone allow karna zaroori hai'); }
+  Maya.save();
+  const tag=$('#tag-'+id); if(tag){ tag.className='tag '+(Maya.state.perms[id]?'ok':'pending'); tag.textContent=Maya.state.perms[id]?'Allowed':'Pending'; }
+  const nx=$('#next'); if(nx && Maya.state.perms.mic) nx.disabled=false;
+}
+
+/* ---------- home ---------- */
+function fmtMin(s){ const m=Math.floor(s/60), r=s%60; return `${m}:${String(r).padStart(2,'0')}`; }
+function renderHome(){
+  const h = new Date().getHours();
+  $('#greet').textContent = (h<12?'Good morning,':h<17?'Good afternoon,':'Good evening,');
+  $('#uname').textContent = Maya.state.name || 'there';
+  const d = new Date();
+  $('#dDay').textContent = d.getDate();
+  $('#dTxt').textContent = d.toLocaleDateString('en-US',{weekday:'short',month:'short'});
+  $('#freeTxt').textContent = `Free mode • ${fmtMin(Maya.state.minutesLeft)} min left today`;
+  $('#energy').textContent = Maya.state.energy;
+}
+Maya.renderHome = renderHome;
+
+function startMain(){
+  $('#onb').classList.add('hide'); $('#main').classList.remove('hide');
+  renderHome(); Maya.go('home');
+}
+
+/* events */
+$$('nav [data-tab]').forEach(b=>b.onclick=()=>Maya.go(b.dataset.tab));
+$$('[data-go]').forEach(b=>b.onclick=()=>{ (Maya.hooks['open:'+b.dataset.go]||(()=>Maya.toast(b.textContent.trim()+' — Part 2 mein aayega')))(); });
+$('#activateBtn').onclick = ()=> (Maya.hooks.activate||(()=>Maya.toast('License system — Part 2 mein aayega')))();
+$('#orb').onclick = $('#micBtn').onclick = ()=> (Maya.hooks.mic||(()=>{ Maya.setOrb('listening'); setTimeout(()=>Maya.setOrb('idle'),1800); Maya.toast('Voice — Part 2 mein aayega'); }))();
+$('#askSend').onclick = ()=>{ const v=$('#askIn').value.trim(); if(!v) return;
+  (Maya.hooks.ask||(()=>Maya.toast('Chat AI — Part 2 mein aayega')))(v); $('#askIn').value=''; };
+$('#askIn').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#askSend').click(); });
+
+/* boot */
+Maya.load();
+if(Maya.state.onboarded) startMain(); else renderOnb();
+</script>
+
+<!-- ===== MAYA PART 2 — Part 1 ke "PART 2 YAHAN" wali line ki jagah paste karein ===== -->
+<script>
+(function(){
+const M = window.Maya, S = M.state;
+const q = s => document.querySelector(s);
+
+/* ===== yahan apne license codes badlein (client-side hai, secure nahi) ===== */
+const LICENSE_CODES = ['NOOR-UNLIMITED-2026'];
+
+S.cfg     = S.cfg     || {provider:'gemini', key:'', model:''};
+S.mem     = S.mem     || [];
+S.journal = S.journal || [];
+S.chat    = S.chat    || [];
+S.licensed= !!S.licensed;
+S.mood    = S.mood    || 'Warm';
+
+/* ---------- daily reset + streak ---------- */
+(function daily(){
+  const today = new Date().toDateString();
+  if(S.day !== today){
+    const y = new Date(Date.now()-864e5).toDateString();
+    S.streak = (S.day === y) ? (S.streak||0)+1 : 1;
+    S.day = today; S.minutesLeft = 600;
+  }
+  S.energy = S.streak || 1; M.save();
+})();
+
+/* -------
