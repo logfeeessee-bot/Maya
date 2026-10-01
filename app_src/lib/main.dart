@@ -1,5 +1,10 @@
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 
 void main() => runApp(const MayaApp());
 
@@ -29,7 +34,16 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctl;
+  final stt = SpeechToText();
+  final tts = FlutterTts();
+  final input = TextEditingController();
+  final List<Map<String, dynamic>> history = [];
+  String apiKey = '';
+  String model = 'gemini-2.5-flash';
+  String lang = 'hi_IN';
+  String reply = '';
   bool listening = false;
+  bool busy = false;
 
   @override
   void initState() {
@@ -37,12 +51,187 @@ class _HomePageState extends State<HomePage>
     _ctl = AnimationController(
         vsync: this, duration: const Duration(seconds: 6))
       ..repeat();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final p = await SharedPreferences.getInstance();
+    apiKey = p.getString('key') ?? '';
+    model = p.getString('model') ?? model;
+    lang = p.getString('lang') ?? lang;
+    await tts.setLanguage(lang.replaceAll('_', '-'));
+    await tts.setSpeechRate(0.5);
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _ctl.dispose();
+    input.dispose();
     super.dispose();
+  }
+
+  void _openSettings() {
+    final k = TextEditingController(text: apiKey);
+    final m = TextEditingController(text: model);
+    final l = TextEditingController(text: lang);
+    showDialog(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: kCard,
+        title: const Text('Settings'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+                controller: k,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'Gemini API key')),
+            TextField(
+                controller: m,
+                decoration: const InputDecoration(labelText: 'Model')),
+            TextField(
+                controller: l,
+                decoration:
+                    const InputDecoration(labelText: 'Bhasha (hi_IN / en_US)')),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              final p = await SharedPreferences.getInstance();
+              apiKey = k.text.trim();
+              model = m.text.trim();
+              lang = l.text.trim();
+              await p.setString('key', apiKey);
+              await p.setString('model', model);
+              await p.setString('lang', lang);
+              await tts.setLanguage(lang.replaceAll('_', '-'));
+              if (c.mounted) Navigator.pop(c);
+              if (mounted) setState(() {});
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _toggleMic() async {
+    if (listening) {
+      await stt.stop();
+      setState(() => listening = false);
+      return;
+    }
+    if (apiKey.isEmpty) {
+      _openSettings();
+      return;
+    }
+    await tts.stop();
+    final ok = await stt.initialize(
+      onError: (e) {
+        if (mounted) setState(() => listening = false);
+      },
+      onStatus: (s) {
+        if ((s == 'done' || s == 'notListening') && mounted) {
+          setState(() => listening = false);
+        }
+      },
+    );
+    if (!ok) {
+      setState(() => reply =
+          'Mic nahi chal raha. Phone Settings > Apps > Maya > Permissions mein Microphone allow karo.');
+      return;
+    }
+    setState(() => listening = true);
+    await stt.listen(
+      localeId: lang,
+      listenFor: const Duration(seconds: 30),
+      pauseFor: const Duration(seconds: 3),
+      onResult: (r) {
+        if (r.finalResult) {
+          setState(() => listening = false);
+          _ask(r.recognizedWords);
+        }
+      },
+    );
+  }
+
+  Future<void> _ask(String text) async {
+    text = text.trim();
+    if (text.isEmpty || busy) return;
+    if (apiKey.isEmpty) {
+      _openSettings();
+      return;
+    }
+    setState(() {
+      busy = true;
+      reply = 'Soch rahi hoon...';
+    });
+    history.add({
+      'role': 'user',
+      'parts': [
+        {'text': text}
+      ]
+    });
+    String out;
+    bool isError = false;
+    try {
+      final res = await http
+          .post(
+            Uri.parse(
+                'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent'),
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': apiKey,
+            },
+            body: jsonEncode({
+              'system_instruction': {
+                'parts': [
+                  {
+                    'text':
+                        'Tum Maya ho, ek dost jaisi female voice assistant. User ki bhasha mein (Hindi, Hinglish ya English) chhote aur saaf jawab do, 1 se 3 vakya. Markdown, star ya emoji mat likho.'
+                  }
+                ]
+              },
+              'contents': history,
+            }),
+          )
+          .timeout(const Duration(seconds: 40));
+      final data = jsonDecode(res.body);
+      if (res.statusCode == 200) {
+        out = (data['candidates'][0]['content']['parts'][0]['text'] ?? '')
+            .toString()
+            .replaceAll('*', '')
+            .trim();
+        history.add({
+          'role': 'model',
+          'parts': [
+            {'text': out}
+          ]
+        });
+        if (history.length > 20) {
+          history.removeRange(0, history.length - 20);
+        }
+      } else {
+        isError = true;
+        out =
+            'Error ${res.statusCode}: ${data['error']?['message'] ?? res.body}';
+        history.removeLast();
+      }
+    } catch (e) {
+      isError = true;
+      out =
+          'Internet ya server ki dikkat hai. Offline mode agle din jodenge.';
+      history.removeLast();
+    }
+    if (!mounted) return;
+    setState(() {
+      busy = false;
+      reply = out;
+    });
+    if (!isError) await tts.speak(out);
   }
 
   Widget chip(IconData i, String t) => Expanded(
@@ -50,7 +239,8 @@ class _HomePageState extends State<HomePage>
           height: 56,
           margin: const EdgeInsets.symmetric(horizontal: 5),
           decoration: BoxDecoration(
-              color: kCard, borderRadius: BorderRadius.circular(18)),
+              color: const Color(0x66151D2E),
+              borderRadius: BorderRadius.circular(18)),
           child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             Icon(i, size: 20, color: Colors.white70),
             const SizedBox(width: 8),
@@ -67,9 +257,9 @@ class _HomePageState extends State<HomePage>
           margin: const EdgeInsets.symmetric(horizontal: 5),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-              color: kCard,
+              color: const Color(0x66151D2E),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white12)),
+              border: Border.all(color: Colors.white24)),
           child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -101,8 +291,17 @@ class _HomePageState extends State<HomePage>
         ],
       );
 
+  Widget orbLine() =>
+      Container(width: 36, height: 1, color: const Color(0x66FFFFFF));
+
   @override
   Widget build(BuildContext context) {
+    final active = listening || busy;
+    final sub = listening
+        ? 'LISTENING...'
+        : busy
+            ? 'THINKING...'
+            : 'HOW CAN I HELP YOU?';
     return Scaffold(
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       floatingActionButton: SizedBox(
@@ -111,7 +310,7 @@ class _HomePageState extends State<HomePage>
         child: FloatingActionButton(
           backgroundColor: kBlue,
           shape: const CircleBorder(),
-          onPressed: () => setState(() => listening = !listening),
+          onPressed: _toggleMic,
           child: Icon(listening ? Icons.stop : Icons.mic,
               size: 32, color: Colors.white),
         ),
@@ -131,194 +330,245 @@ class _HomePageState extends State<HomePage>
           ],
         ),
       ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Column(children: [
-            const SizedBox(height: 8),
-            const Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                SizedBox(width: 40),
-                Text('Maya',
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF0B1220), Color(0xFF13203F), Color(0xFF0E1830)],
+          ),
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Column(children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const SizedBox(width: 48),
+                  const Text('Maya',
+                      style: TextStyle(
+                          fontSize: 26, fontWeight: FontWeight.bold)),
+                  IconButton(
+                      onPressed: _openSettings,
+                      icon: const Icon(Icons.settings, size: 26)),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                    color: const Color(0xFF141C33),
+                    borderRadius: BorderRadius.circular(20)),
+                child: const Row(children: [
+                  Icon(Icons.lock, color: kBlue),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                        'Free mode • 10:00 min left today\nActivate a license for tools and unlimited talk',
+                        style: TextStyle(fontSize: 13)),
+                  ),
+                  Text('Activate',
+                      style: TextStyle(
+                          color: kBlue,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
+                ]),
+              ),
+              const SizedBox(height: 10),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Good morning,',
+                    style: TextStyle(fontSize: 22, color: Colors.white54)),
+              ),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text('there',
                     style:
-                        TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
-                Icon(Icons.notifications_none, size: 28),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                  color: const Color(0xFF141C33),
-                  borderRadius: BorderRadius.circular(20)),
-              child: const Row(children: [
-                Icon(Icons.lock, color: kBlue),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                      'Free mode • 10:00 min left today\nActivate a license for tools and unlimited talk',
-                      style: TextStyle(fontSize: 13)),
+                        TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                    reply.isEmpty ? 'Maya is ready to help you.' : '',
+                    style: const TextStyle(
+                        fontSize: 15, color: Colors.white54)),
+              ),
+              if (reply.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.all(12),
+                  constraints: const BoxConstraints(maxHeight: 100),
+                  decoration: BoxDecoration(
+                      color: kCard, borderRadius: BorderRadius.circular(16)),
+                  child: SingleChildScrollView(
+                      child:
+                          Text(reply, style: const TextStyle(fontSize: 15))),
                 ),
-                Text('Activate',
-                    style: TextStyle(
-                        color: kBlue,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold)),
-              ]),
-            ),
-            const SizedBox(height: 14),
-            const Align(
-              alignment: Alignment.centerLeft,
-              child: Text('Good morning,',
-                  style: TextStyle(fontSize: 24, color: Colors.white60)),
-            ),
-            const Align(
-              alignment: Alignment.centerLeft,
-              child: Text('there',
-                  style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
-            ),
-            Expanded(
-              child: Center(
-                child: AnimatedBuilder(
-                  animation: _ctl,
-                  builder: (context, _) => SizedBox(
-                    width: 320,
-                    height: 320,
-                    child: CustomPaint(
-                      painter: RingPainter(_ctl.value, listening),
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text('AI ASSISTANT',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    letterSpacing: 2,
-                                    color: Colors.white60)),
-                            ShaderMask(
-                              shaderCallback: (r) => const LinearGradient(
-                                      colors: [
-                                    Colors.white,
-                                    Color(0xFF6C8CFF),
-                                    Color(0xFFE066C8)
-                                  ]).createShader(r),
-                              child: const Text('M.A.Y.A',
-                                  style: TextStyle(
-                                      fontSize: 52,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white)),
+              Expanded(
+                child: Center(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: AnimatedBuilder(
+                      animation: _ctl,
+                      builder: (context, _) => SizedBox(
+                        width: 360,
+                        height: 360,
+                        child: CustomPaint(
+                          painter: OrbPainter(_ctl.value, active),
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    orbLine(),
+                                    const SizedBox(width: 8),
+                                    const Text('AI ASSISTANT',
+                                        style: TextStyle(
+                                            fontSize: 10,
+                                            letterSpacing: 2,
+                                            color: Colors.white60)),
+                                    const SizedBox(width: 8),
+                                    orbLine(),
+                                  ],
+                                ),
+                                ShaderMask(
+                                  shaderCallback: (r) => const LinearGradient(
+                                          colors: [
+                                        Color(0xFFE6E8F0),
+                                        Color(0xFF6C8CFF),
+                                        Color(0xFFE066C8)
+                                      ]).createShader(r),
+                                  child: const Text('M.A.Y.A',
+                                      style: TextStyle(
+                                          fontSize: 40,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white)),
+                                ),
+                                const SizedBox(height: 22),
+                                Text(sub,
+                                    style: const TextStyle(
+                                        fontSize: 10,
+                                        letterSpacing: 1.5,
+                                        color: Colors.white54)),
+                              ],
                             ),
-                            Text(
-                                listening
-                                    ? 'LISTENING...'
-                                    : 'HOW CAN I HELP YOU?',
-                                style: const TextStyle(
-                                    fontSize: 11,
-                                    letterSpacing: 1.5,
-                                    color: Colors.white54)),
-                          ],
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-            Row(children: [
-              chip(Icons.music_note, 'Music'),
-              chip(Icons.menu_book, 'Study'),
-              chip(Icons.edit, 'Journal'),
-            ]),
-            const SizedBox(height: 10),
-            Row(children: [
-              info(Icons.cloud, 'Weather', '—', 'No data'),
-              info(Icons.calendar_today, 'Today', '30', 'Wed, Sep'),
-              info(Icons.favorite, 'Mood', 'Warm', 'All good'),
-            ]),
-            const SizedBox(height: 10),
-            Container(
-              height: 54,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              decoration: BoxDecoration(
-                  color: kCard,
-                  borderRadius: BorderRadius.circular(30),
-                  border: Border.all(color: Colors.white12)),
-              child: const Row(children: [
-                Icon(Icons.attach_file, color: Colors.white54),
-                SizedBox(width: 12),
-                Expanded(
-                    child: Text('Ask Maya anything...',
-                        style:
-                            TextStyle(fontSize: 18, color: Colors.white38))),
-                Icon(Icons.send, color: Colors.white54),
+              Row(children: [
+                chip(Icons.music_note, 'Music'),
+                chip(Icons.menu_book, 'Study'),
+                chip(Icons.edit, 'Journal'),
               ]),
-            ),
-            const SizedBox(height: 10),
-          ]),
+              const SizedBox(height: 10),
+              Row(children: [
+                info(Icons.cloud, 'Weather', '—', 'No data'),
+                info(Icons.calendar_today, 'Today', '30', 'Wed, Sep'),
+                info(Icons.favorite, 'Mood', 'Warm', 'All good'),
+              ]),
+              const SizedBox(height: 10),
+              Container(
+                height: 54,
+                padding: const EdgeInsets.only(left: 16, right: 6),
+                decoration: BoxDecoration(
+                    color: const Color(0x66151D2E),
+                    borderRadius: BorderRadius.circular(30),
+                    border: Border.all(color: Colors.white24)),
+                child: Row(children: [
+                  const Icon(Icons.attach_file, color: Colors.white54),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: input,
+                      style: const TextStyle(fontSize: 17),
+                      decoration: const InputDecoration(
+                          hintText: 'Ask Maya anything...',
+                          border: InputBorder.none),
+                      onSubmitted: (v) {
+                        input.clear();
+                        _ask(v);
+                      },
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.send, color: Colors.white54),
+                    onPressed: () {
+                      final v = input.text;
+                      input.clear();
+                      _ask(v);
+                    },
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 10),
+            ]),
+          ),
         ),
       ),
     );
   }
 }
 
-class RingPainter extends CustomPainter {
+class OrbPainter extends CustomPainter {
   final double t;
-  final bool listening;
-  RingPainter(this.t, this.listening);
+  final bool active;
+  OrbPainter(this.t, this.active);
+
+  Offset _pt(Offset c, double ang, double rad) =>
+      Offset(c.dx + rad * math.cos(ang), c.dy + rad * math.sin(ang));
+
+  void _star(Canvas canvas, Offset p, double s) {
+    final line = Paint()
+      ..color = const Color(0xCCFFFFFF)
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(p.translate(-s, 0), p.translate(s, 0), line);
+    canvas.drawLine(p.translate(0, -s), p.translate(0, s), line);
+    canvas.drawCircle(p, 2, Paint()..color = Colors.white);
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = Offset(size.width / 2, size.height / 2);
-    final r = size.width / 2 - 20;
-    final base = Paint()
+    final full = 2 * math.pi;
+    final sway = math.sin(t * full) * (active ? 0.5 : 0.12);
+
+    // soft glow behind
+    canvas.drawCircle(
+        c,
+        150,
+        Paint()
+          ..shader = const RadialGradient(
+                  colors: [Color(0x224C7DFF), Color(0x00000000)])
+              .createShader(Rect.fromCircle(center: c, radius: 150)));
+
+    // corner circuit lines
+    final circ = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
+      ..strokeWidth = 1
       ..color = const Color(0x334C7DFF);
-    canvas.drawCircle(c, r, base);
-    canvas.drawCircle(c, r - 18, base);
-
-    final a = t * 2 * math.pi;
-    final grey = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 10
-      ..strokeCap = StrokeCap.round
-      ..color = const Color(0xFFBDBDC8);
-    canvas.drawArc(Rect.fromCircle(center: c, radius: r), a, 1.2, false, grey);
-    final blue = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 6
-      ..strokeCap = StrokeCap.round
-      ..color = kBlue;
-    canvas.drawArc(
-        Rect.fromCircle(center: c, radius: r - 18), -a * 1.5, 1.0, false, blue);
-
-    if (listening) {
-      const cols = [
-        Color(0xFFFF4D9D),
-        Color(0xFFA64DFF),
-        Color(0xFF4C7DFF),
-        Color(0xFF00E5FF),
-        Color(0xFF00E676),
-        Color(0xFFFFEA00),
-        Color(0xFFFF4D9D),
-      ];
-      for (int i = 0; i < 4; i++) {
-        final p = (t * 3 + i / 4) % 1.0;
-        final rad = r * 0.55 + p * r * 0.6;
-        final rect = Rect.fromCircle(center: c, radius: rad);
-        final paint = Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 7 * (1 - p) + 1
-          ..shader = SweepGradient(
-            colors: cols,
-            transform: GradientRotation(a * (i.isEven ? 1 : -1)),
-          ).createShader(rect);
-        canvas.drawCircle(c, rad, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant RingPainter old) => true;
-}
+    final dot = Paint()..color = const Color(0x664C7DFF);
+    for (final sx in [1.0, -1.0]) {
+      for (final sy in [1.0, -1.0]) {
+        final x0 = c.dx + sx * 165;
+        final y0 = c.dy + sy * 85;
+        final path = Path()
+          ..moveTo(x0, y0)
+          ..lineTo(x0 + sx * 12, y0)
+          ..lineTo(x0 + sx * 22, y0 - sy * 14)
+          ..lineTo(x0 + sx * 22, y0 - sy * 40);
+        canvas.drawPath(path, circ);
+        canvas.drawCircle(Offset(x0 + sx * 22, y0 - sy * 40), 2, dot);
+        final y1 = c.dy + sy * 130;
+        final path2 = Path()
+          ..moveTo(c.dx + sx * 110, y1 + sy * 20)
+          ..lineTo(c.dx + sx * 140, y1 + sy * 20)
+          ..lineTo(c.dx + sx * 150, y1 + sy * 8);
+        canvas.draw
