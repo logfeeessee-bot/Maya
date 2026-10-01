@@ -1,10 +1,10 @@
 import 'dart:convert';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+import 'orb.dart';
 
 void main() => runApp(const MayaApp());
 
@@ -515,60 +515,3 @@ class _HomePageState extends State<HomePage>
     );
   }
 }
-
-class OrbPainter extends CustomPainter {
-  final double t;
-  final bool active;
-  OrbPainter(this.t, this.active);
-
-  Offset _pt(Offset c, double ang, double rad) =>
-      Offset(c.dx + rad * math.cos(ang), c.dy + rad * math.sin(ang));
-
-  void _star(Canvas canvas, Offset p, double s) {
-    final line = Paint()
-      ..color = const Color(0xCCFFFFFF)
-      ..strokeWidth = 1.6
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(p.translate(-s, 0), p.translate(s, 0), line);
-    canvas.drawLine(p.translate(0, -s), p.translate(0, s), line);
-    canvas.drawCircle(p, 2, Paint()..color = Colors.white);
-  }
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final c = Offset(size.width / 2, size.height / 2);
-    final full = 2 * math.pi;
-    final sway = math.sin(t * full) * (active ? 0.5 : 0.12);
-
-    // soft glow behind
-    canvas.drawCircle(
-        c,
-        150,
-        Paint()
-          ..shader = const RadialGradient(
-                  colors: [Color(0x224C7DFF), Color(0x00000000)])
-              .createShader(Rect.fromCircle(center: c, radius: 150)));
-
-    // corner circuit lines
-    final circ = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1
-      ..color = const Color(0x334C7DFF);
-    final dot = Paint()..color = const Color(0x664C7DFF);
-    for (final sx in [1.0, -1.0]) {
-      for (final sy in [1.0, -1.0]) {
-        final x0 = c.dx + sx * 165;
-        final y0 = c.dy + sy * 85;
-        final path = Path()
-          ..moveTo(x0, y0)
-          ..lineTo(x0 + sx * 12, y0)
-          ..lineTo(x0 + sx * 22, y0 - sy * 14)
-          ..lineTo(x0 + sx * 22, y0 - sy * 40);
-        canvas.drawPath(path, circ);
-        canvas.drawCircle(Offset(x0 + sx * 22, y0 - sy * 40), 2, dot);
-        final y1 = c.dy + sy * 130;
-        final path2 = Path()
-          ..moveTo(c.dx + sx * 110, y1 + sy * 20)
-          ..lineTo(c.dx + sx * 140, y1 + sy * 20)
-          ..lineTo(c.dx + sx * 150, y1 + sy * 8);
-        canvas.draw
