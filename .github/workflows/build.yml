@@ -19,6 +19,10 @@ jobs:
         run: |
           flutter create --platforms=android --org com.maya --project-name maya maya_build
           cp -r app_src/* maya_build/
+          cd maya_build
+          flutter pub add speech_to_text flutter_tts http shared_preferences
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/' android/app/build.gradle* || true
+          sed -i '0,/<application/s//<uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"\/>\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"\/>\n    <queries><intent><action android:name="android.speech.RecognitionService"\/><\/intent><\/queries>\n    <application/' android/app/src/main/AndroidManifest.xml
       - name: APK banao
         working-directory: maya_build
         run: |
