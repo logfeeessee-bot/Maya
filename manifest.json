@@ -1,0 +1,9 @@
+{
+  "name": "Mayra AI",
+  "short_name": "Mayra",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#0a0a12",
+  "theme_color": "#a970ff",
+  "icons": [{ "src": "icon.png", "sizes": "512x512", "type": "image/png" }]
+}
