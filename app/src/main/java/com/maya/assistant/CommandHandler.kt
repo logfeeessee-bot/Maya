@@ -34,116 +34,144 @@ class CommandHandler(private val c: Context) {
     private fun granted(p: String) = ContextCompat.checkSelfPermission(c, p) == PackageManager.PERMISSION_GRANTED
     private fun acc() = MayaAccessibilityService.inst
     private fun newTask(i: Intent) = i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    private fun open(i: Intent) = c.startActivity(newTask(i))
+    private fun noAcc() = "पहले Accessibility सेवा चालू कीजिए"
 
+    // =====================================================================
+    //  AI (Groq) se aaya hua action chalane ke liye.
+    //  Return: null = sab theek (AI ka reply bolo) | text = galti ya jawab (wahi bolo)
+    // =====================================================================
+    fun execute(action: String, target: String, text: String, on: Boolean): String? = when (action) {
+        "open_app" -> openApp(target)
+        "call" -> call(target)
+        "sms" -> sms(target, text)
+        "torch" -> { torch(on); null }
+        "volume_up" -> { vol(true); null }
+        "volume_down" -> { vol(false); null }
+        "back" -> global(AccessibilityService.GLOBAL_ACTION_BACK)
+        "home" -> global(AccessibilityService.GLOBAL_ACTION_HOME)
+        "recents" -> global(AccessibilityService.GLOBAL_ACTION_RECENTS)
+        "notifications" -> global(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS)
+        "screenshot" -> shot()
+        "lock" -> lockScreen()
+        "scroll_down" -> swipe(true)
+        "scroll_up" -> swipe(false)
+        "click_text" -> click(target)
+        "wifi" -> { open(Intent(Settings.Panel.ACTION_WIFI)); null }
+        "bluetooth" -> { open(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)); null }
+        "settings" -> { open(Intent(Settings.ACTION_SETTINGS)); null }
+        "time" -> timeText()
+        else -> null
+    }
+
+    // =====================================================================
+    //  Purane rules (jab internet ya Groq key na ho tab kaam aate hain)
+    // =====================================================================
     fun handle(raw: String): String {
         val t = raw.lowercase(Locale.ROOT).trim()
         fun has(vararg k: String) = k.any { t.contains(it) }
+        val smsM = Regex("(.+?)\\s+(?:ko|को)\\s+(?:message|sms|मैसेज|एसएमएस)\\s+(?:bhejo|karo|भेजो|करो)\\s*(.*)").find(t)
+        val clickM = Regex("(.+?)\\s+(?:par|pe|पर|पे)\\s+(?:click|tap|dabao|क्लिक|टैप|दबाओ)").find(t)
 
         return when {
-            // Torch
             has("torch", "टॉर्च", "flashlight", "फ्लैश", "टोर्च") -> {
                 val on = !has("band", "बंद", "off", "बन्द")
                 torch(on); if (on) "टॉर्च चालू कर दी" else "टॉर्च बंद कर दी"
             }
-            // Maya band
             has("band karo", "band kar do", "stop", "बंद करो", "बंद कर दो", "रुक जाओ", "रुको", "चुप") -> STOP
-
-            // Time
-            has("time", "samay", "kitne baje", "टाइम", "समय", "कितने बजे") ->
-                "अभी " + SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date()) + " हुए हैं"
-
-            // Volume
+            has("time", "samay", "kitne baje", "टाइम", "समय", "कितने बजे") -> timeText()
             has("volume", "वॉल्यूम", "आवाज़", "आवाज") -> {
                 val up = has("badhao", "बढ़ा", "बढ़ाओ", "up", "zyada", "ज्यादा", "तेज", "ऊपर")
-                val am = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                repeat(3) {
-                    am.adjustStreamVolume(AudioManager.STREAM_MUSIC,
-                        if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
-                }
-                if (up) "आवाज़ बढ़ा दी" else "आवाज़ कम कर दी"
+                vol(up); if (up) "आवाज़ बढ़ा दी" else "आवाज़ कम कर दी"
             }
-
-            // Wifi / Bluetooth / Settings
             has("wifi", "वाईफाई", "वाई-फाई", "वाईफ़ाई") -> { open(Intent(Settings.Panel.ACTION_WIFI)); "वाईफाई खोल रही हूँ" }
             has("bluetooth", "ब्लूटूथ") -> { open(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)); "ब्लूटूथ खोल रही हूँ" }
             has("settings", "सेटिंग") -> { open(Intent(Settings.ACTION_SETTINGS)); "सेटिंग खोल रही हूँ" }
-
-            // Accessibility: global actions
-            has("notification", "नोटिफिकेशन") -> global(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS, "नोटिफिकेशन खोल दिए")
-            has("recent", "रीसेंट") -> global(AccessibilityService.GLOBAL_ACTION_RECENTS, "रीसेंट ऐप्स खोल दिए")
-            has("screenshot", "स्क्रीनशॉट") ->
-                if (Build.VERSION.SDK_INT >= 28) global(AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT, "स्क्रीनशॉट ले लिया")
-                else "इस फोन पर स्क्रीनशॉट नहीं हो सकता"
-            has("lock", "लॉक") ->
-                if (Build.VERSION.SDK_INT >= 28) global(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN, "फोन लॉक कर दिया")
-                else "इस फोन पर लॉक नहीं हो सकता"
-            has("wapas", "wapis", "back", "पीछे", "वापस") -> global(AccessibilityService.GLOBAL_ACTION_BACK, "ठीक है, पीछे आ गई")
-            has("home", "होम", "घर जाओ") -> global(AccessibilityService.GLOBAL_ACTION_HOME, "होम पर आ गई")
-            has("neeche", "नीचे", "scroll down") -> swipe(true)
-            has("upar", "ऊपर", "scroll up") -> swipe(false)
-
-            // Click on text: "<naam> par click karo"
-            Regex("(.+?)\\s+(par|pe|पर|पे)\\s+(click|tap|dabao|क्लिक|टैप|दबाओ|क्लिक करो)").containsMatchIn(t) -> {
-                val name = Regex("(.+?)\\s+(par|pe|पर|पे)\\s+").find(t)!!.groupValues[1].trim()
-                val s = acc() ?: return "पहले Accessibility सेवा चालू कीजिए"
-                if (s.clickText(name)) "$name दबा दिया" else "$name स्क्रीन पर नहीं मिला"
+            has("notification", "नोटिफिकेशन") -> global(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) ?: "नोटिफिकेशन खोल दिए"
+            has("recent", "रीसेंट") -> global(AccessibilityService.GLOBAL_ACTION_RECENTS) ?: "रीसेंट ऐप्स खोल दिए"
+            has("screenshot", "स्क्रीनशॉट") -> shot() ?: "स्क्रीनशॉट ले लिया"
+            has("lock", "लॉक") -> lockScreen() ?: "फोन लॉक कर दिया"
+            has("wapas", "wapis", "back", "पीछे", "वापस") -> global(AccessibilityService.GLOBAL_ACTION_BACK) ?: "ठीक है, पीछे आ गई"
+            has("home", "होम", "घर जाओ") -> global(AccessibilityService.GLOBAL_ACTION_HOME) ?: "होम पर आ गई"
+            has("neeche", "नीचे", "scroll down") -> swipe(true) ?: "नीचे स्क्रॉल किया"
+            has("upar", "ऊपर", "scroll up") -> swipe(false) ?: "ऊपर स्क्रॉल किया"
+            clickM != null -> {
+                val name = clickM.groupValues[1].trim()
+                click(name) ?: "$name दबा दिया"
             }
-
-            // SMS: "<naam> ko message bhejo <text>"
-            Regex("(.+?)\\s+(?:ko|को)\\s+(?:message|sms|मैसेज|एसएमएस)\\s+(?:bhejo|karo|भेजो|करो)\\s*(.*)").find(t) != null -> {
-                val m = Regex("(.+?)\\s+(?:ko|को)\\s+(?:message|sms|मैसेज|एसएमएस)\\s+(?:bhejo|karo|भेजो|करो)\\s*(.*)").find(t)!!
-                sms(m.groupValues[1].trim(), m.groupValues[2].trim())
+            smsM != null -> {
+                val name = smsM.groupValues[1].trim()
+                sms(name, smsM.groupValues[2].trim()) ?: "$name को मैसेज भेज दिया"
             }
-
-            // Call
             has("call", "कॉल", "फोन", "phone", "dial", "फ़ोन") -> {
                 val name = strip(t, "call", "karo", "kar", "do", "lagao", "phone", "dial", "ko", "कॉल", "करो", "कर", "दो", "लगाओ", "फोन", "फ़ोन", "को", "मिलाओ")
-                call(name)
+                call(name) ?: "$name को कॉल कर रही हूँ"
             }
-
-            // Open app
             has("kholo", "open", "खोलो", "खोल", "चालू करो", "start", "चलाओ") -> {
                 val name = strip(t, "kholo", "open", "khol", "do", "karo", "खोलो", "खोल", "दो", "चालू", "करो", "start", "चलाओ", "ऐप", "app")
-                openApp(name)
+                openApp(name) ?: "$name खोल रही हूँ"
             }
-
-            // ---- Yahan baad mein AI (Claude / Gemini API) jod sakte ho jo har baat samjhe ----
-            else -> "मुझे समझ नहीं आया, फिर से बोलिए"
+            else -> "मुझे समझ नहीं आया, फिर से बोलिए (AI के लिए Settings में Groq key डालिए)"
         }
     }
 
-    // ---------- helpers ----------
-    private fun open(i: Intent) = c.startActivity(newTask(i))
-
+    // ---------- madad wale functions ----------
     private fun strip(text: String, vararg words: String): String {
         var s = " $text "
         words.forEach { s = s.replace(Regex("(?<=\\s)${Regex.escape(it)}(?=\\s)"), " ") }
         return s.trim().replace(Regex("\\s+"), " ")
     }
 
+    private fun timeText() =
+        "अभी " + SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date()) + " हुए हैं"
+
+    private fun vol(up: Boolean) {
+        val am = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        repeat(3) {
+            am.adjustStreamVolume(AudioManager.STREAM_MUSIC,
+                if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+        }
+    }
+
     private fun torch(on: Boolean) {
-        val cm = c.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        val id = cm.cameraIdList.firstOrNull {
-            cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-        } ?: return
-        cm.setTorchMode(id, on)
+        try {
+            val cm = c.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val id = cm.cameraIdList.firstOrNull {
+                cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } ?: return
+            cm.setTorchMode(id, on)
+        } catch (_: Exception) {}
     }
 
-    private fun global(action: Int, ok: String): String {
-        val s = acc() ?: return "पहले Accessibility सेवा चालू कीजिए"
+    private fun global(action: Int): String? {
+        val s = acc() ?: return noAcc()
         s.performGlobalAction(action)
-        return ok
+        return null
     }
 
-    private fun swipe(up: Boolean): String {
-        val s = acc() ?: return "पहले Accessibility सेवा चालू कीजिए"
+    private fun shot(): String? =
+        if (Build.VERSION.SDK_INT >= 28) global(AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT)
+        else "इस फोन पर स्क्रीनशॉट नहीं हो सकता"
+
+    private fun lockScreen(): String? =
+        if (Build.VERSION.SDK_INT >= 28) global(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)
+        else "इस फोन पर लॉक नहीं हो सकता"
+
+    private fun swipe(up: Boolean): String? {
+        val s = acc() ?: return noAcc()
         s.swipe(up)
-        return if (up) "नीचे स्क्रॉल किया" else "ऊपर स्क्रॉल किया"
+        return null
     }
 
-    private fun openApp(spoken: String): String {
+    private fun click(name: String): String? {
+        val s = acc() ?: return noAcc()
+        return if (s.clickText(name)) null else "$name स्क्रीन पर नहीं मिला"
+    }
+
+    private fun openApp(spoken: String): String? {
         if (spoken.isBlank()) return "कौन सा ऐप खोलूँ?"
-        val name = aliases[spoken] ?: spoken
+        val key = spoken.lowercase(Locale.ROOT).trim()
+        val name = aliases[key] ?: key
         val pm = c.packageManager
         val apps = pm.queryIntentActivities(
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
@@ -151,7 +179,7 @@ class CommandHandler(private val c: Context) {
             ?: return "$spoken ऐप नहीं मिला"
         val launch = pm.getLaunchIntentForPackage(hit.activityInfo.packageName) ?: return "ऐप नहीं खुल पाया"
         open(launch)
-        return "$spoken खोल रही हूँ"
+        return null
     }
 
     private fun findNumber(name: String): String? {
@@ -164,21 +192,21 @@ class CommandHandler(private val c: Context) {
         return null
     }
 
-    private fun call(name: String): String {
+    private fun call(name: String): String? {
         if (name.isBlank()) return "किसे कॉल करूँ?"
         if (!granted(CALL_PHONE)) return "कॉल की अनुमति नहीं है"
         val num = findNumber(name) ?: return "$name का नंबर नहीं मिला"
         open(Intent(Intent.ACTION_CALL, Uri.parse("tel:$num")))
-        return "$name को कॉल कर रही हूँ"
+        return null
     }
 
-    private fun sms(name: String, body: String): String {
+    private fun sms(name: String, body: String): String? {
         if (!granted(SEND_SMS)) return "SMS की अनुमति नहीं है"
         if (body.isBlank()) return "क्या मैसेज भेजूँ?"
         val num = findNumber(name) ?: return "$name का नंबर नहीं मिला"
         val sm = if (Build.VERSION.SDK_INT >= 31) c.getSystemService(SmsManager::class.java)
         else @Suppress("DEPRECATION") SmsManager.getDefault()
         sm.sendTextMessage(num, null, body, null, null)
-        return "$name को मैसेज भेज दिया"
+        return null
     }
 }
