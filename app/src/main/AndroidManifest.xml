@@ -25,6 +25,7 @@
     <application
         android:label="Maya"
         android:allowBackup="true"
+        android:usesCleartextTraffic="false"
         android:theme="@style/Theme.AppCompat.NoActionBar">
 
         <activity android:name=".SetupActivity" android:exported="true">
@@ -40,6 +41,8 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <activity android:name=".SettingsActivity" android:exported="false" />
 
         <service
             android:name=".MayaService"
