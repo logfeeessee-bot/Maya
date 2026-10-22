@@ -6,7 +6,9 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -22,14 +24,22 @@ class HomeActivity : AppCompatActivity() {
     private val BLUE = 0xFF4F7CFF.toInt()
     private val GRAY = 0xFF8C97B2.toInt()
     private val LINE = 0xFF2A3550.toInt()
-    private lateinit var orb: OrbView
+    private var orb: OrbView? = null          // sirf tab, jab "Display over other apps" permission nahi hai
     private lateinit var mic: TextView
+    private var built = false
 
     private val listener: (Int) -> Unit = { s ->
         runOnUiThread {
-            orb.mode = s
-            mic.text = if (s == 0) "🎤" else "⏹"
-            mic.background = roundBg(if (s == 0) BLUE else 0xFFFF4F6D.toInt(), 40, if (s == 0) BLUE else 0xFFFF4F6D.toInt(), this)
+            if (built) {
+                orb?.let {
+                    it.setColor(Prefs.orb(this))
+                    it.mode = s
+                    it.visibility = if (s == 0) View.GONE else View.VISIBLE
+                }
+                mic.text = if (s == 0) "🎤" else "⏹"
+                val col = if (s == 0) BLUE else 0xFFFF4F6D.toInt()
+                mic.background = roundBg(col, 40, col, this)
+            }
         }
     }
 
@@ -55,9 +65,12 @@ class HomeActivity : AppCompatActivity() {
             setPadding(dp(18), dp(8), dp(18), dp(8))
         }
 
-        // Top bar
+        // Top bar  (☰ dabao → Settings)
         val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        top.addView(tv("☰", 24f, Color.WHITE))
+        top.addView(tv("☰", 26f, Color.WHITE).apply {
+            setPadding(dp(8), dp(8), dp(16), dp(8))
+            setOnClickListener { startActivity(Intent(this@HomeActivity, SettingsActivity::class.java)) }
+        })
         top.addView(tv("Maya", 26f, Color.WHITE, true).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(0, -2, 1f))
         top.addView(tv("🔔", 22f, Color.WHITE))
         root.addView(top)
@@ -69,10 +82,14 @@ class HomeActivity : AppCompatActivity() {
         root.addView(tv("there", 34f, Color.WHITE, true))
         root.addView(tv("Maya is ready to help you.", 16f, GRAY).apply { setPadding(0, dp(4), 0, 0) })
 
-        // Orb + title
+        // Beech ka hissa: M.A.Y.A likha hua
         val frame = FrameLayout(this)
-        orb = OrbView(this)
-        frame.addView(orb, FrameLayout.LayoutParams(-1, -1))
+        if (!Settings.canDrawOverlays(this)) {
+            orb = OrbView(this).also {
+                it.visibility = View.GONE
+                frame.addView(it, FrameLayout.LayoutParams(-1, -1))
+            }
+        }
         val center = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
         center.addView(tv("AI ASSISTANT", 12f, GRAY).apply { gravity = Gravity.CENTER })
         center.addView(tv("M.A.Y.A", 44f, Color.WHITE, true).apply { gravity = Gravity.CENTER })
@@ -116,7 +133,7 @@ class HomeActivity : AppCompatActivity() {
         bar.addView(send)
         root.addView(bar, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
 
-        // Bottom nav with big mic
+        // Bottom nav + bada mic
         mic = tv("🎤", 30f, Color.WHITE).apply {
             gravity = Gravity.CENTER
             background = roundBg(BLUE, 40, BLUE, this@HomeActivity)
@@ -134,11 +151,12 @@ class HomeActivity : AppCompatActivity() {
         root.addView(nav, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
 
         setContentView(root)
+        built = true
     }
 
     override fun onStart() {
         super.onStart()
-        if (::orb.isInitialized) { MayaService.listeners.add(listener); listener(MayaService.state) }
+        if (built) { MayaService.listeners.add(listener); listener(MayaService.state) }
     }
 
     override fun onStop() {
