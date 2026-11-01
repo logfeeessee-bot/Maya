@@ -49,6 +49,7 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
     private var listening = false
     private var orbX = 0
     private var orbY = 0
+    private var lastSorry = 0L
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -185,6 +186,13 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
         setState(0)
     }
 
+    /** Awaaz samajh na aaye to maafi maangti hai (8 second mein sirf ek baar) */
+    private fun sorry() {
+        val en = Prefs.lang(this).startsWith("en")
+        say(if (en) "Sorry, I could not understand your voice. Please say it again."
+        else "माफ़ कीजिए, मुझे आपकी आवाज़ समझ नहीं आई, कृपया फिर से बोलिए")
+    }
+
     private fun recognize() {
         handler.post {
             if (!listening) return@post
@@ -195,7 +203,15 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
                         val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
                         if (t.isNullOrBlank()) recognize() else think(t)
                     }
-                    override fun onError(e: Int) { handler.postDelayed({ recognize() }, 600) }
+                    override fun onError(e: Int) {
+                        val now = System.currentTimeMillis()
+                        if (e == SpeechRecognizer.ERROR_NO_MATCH && now - lastSorry > 8000) {
+                            lastSorry = now
+                            sorry()
+                        } else {
+                            handler.postDelayed({ recognize() }, 600)
+                        }
+                    }
                     override fun onReadyForSpeech(p: Bundle?) {}
                     override fun onBeginningOfSpeech() {}
                     override fun onRmsChanged(v: Float) {}
@@ -255,6 +271,17 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun afterSpeech() {
+        if (listening) { setState(1); recognize() }
+        else { hideOrb(); setState(0) }
+    }
+
+    override fun onDestroy() {
+        hideOrb()
+        glow?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        sr?.destroy(); tts?.shutdown(); worker.shutdown()
+        super.onDestroy()
+    }
+}h() {
         if (listening) { setState(1); recognize() }
         else { hideOrb(); setState(0) }
     }
