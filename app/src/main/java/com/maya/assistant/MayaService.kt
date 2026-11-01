@@ -233,7 +233,10 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
                     }
                 }
             } catch (e: Exception) {
-                handler.post { localReply(text) }   // internet/key na ho to purane rules
+                handler.post {
+                    android.widget.Toast.makeText(this, "Groq galti: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                    localReply(text)
+                }
             }
         }
     }
@@ -257,6 +260,12 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
+        hideOrb()
+        glow?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        sr?.destroy(); tts?.shutdown(); worker.shutdown()
+        super.onDestroy()
+    }
+} onDestroy() {
         hideOrb()
         glow?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         sr?.destroy(); tts?.shutdown(); worker.shutdown()
