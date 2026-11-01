@@ -4,6 +4,8 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
+import android.os.Build
+import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -24,6 +26,36 @@ class MayaAccessibilityService : AccessibilityService() {
             if (x != null && x.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
         }
         return false
+    }
+
+    private fun findEditable(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (n.isEditable) return n
+        for (i in 0 until n.childCount) {
+            val c = n.getChild(i) ?: continue
+            findEditable(c)?.let { return it }
+        }
+        return null
+    }
+
+    private fun inputNode(): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        return root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: findEditable(root)
+    }
+
+    /** Jo text box khula ho usme likhta hai */
+    fun typeText(txt: String): Boolean {
+        val node = inputNode() ?: return false
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, txt)
+        }
+        return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    /** Keyboard ka Enter / Search dabata hai (Android 11 ya naye par) */
+    fun pressEnter(): Boolean {
+        if (Build.VERSION.SDK_INT < 30) return false
+        val node = inputNode() ?: return false
+        return node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
     }
 
     /** up = true → ungli neeche se upar (content neeche scroll hota hai) */
