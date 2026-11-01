@@ -61,6 +61,11 @@ class CommandHandler(private val c: Context) {
         "bluetooth" -> { open(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)); null }
         "settings" -> { open(Intent(Settings.ACTION_SETTINGS)); null }
         "time" -> timeText()
+        "youtube_search" -> youtubeSearch(target.ifBlank { text })
+        "web_search" -> webSearch(target.ifBlank { text })
+        "navigate" -> navigate(target)
+        "type_text" -> typeText(text.ifBlank { target })
+        "press_enter" -> pressEnter()
         else -> null
     }
 
@@ -168,6 +173,45 @@ class CommandHandler(private val c: Context) {
         return if (s.clickText(name)) null else "$name स्क्रीन पर नहीं मिला"
     }
 
+    private fun typeText(t: String): String? {
+        if (t.isBlank()) return "क्या लिखूँ?"
+        val s = acc() ?: return noAcc()
+        return if (s.typeText(t)) null else "कोई टेक्स्ट बॉक्स नहीं मिला"
+    }
+
+    private fun pressEnter(): String? {
+        val s = acc() ?: return noAcc()
+        return if (s.pressEnter()) null else "एंटर नहीं दबा पाई"
+    }
+
+    private fun youtubeSearch(q: String): String? {
+        if (q.isBlank()) return "क्या खोजूँ?"
+        val uri = Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(q))
+        return try {
+            open(Intent(Intent.ACTION_VIEW, uri).setPackage("com.google.android.youtube")); null
+        } catch (e: Exception) {
+            try { open(Intent(Intent.ACTION_VIEW, uri)); null } catch (e2: Exception) { "YouTube नहीं खुल पाया" }
+        }
+    }
+
+    private fun webSearch(q: String): String? {
+        if (q.isBlank()) return "क्या खोजूँ?"
+        return try {
+            open(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=" + Uri.encode(q)))); null
+        } catch (e: Exception) { "सर्च नहीं खुल पाया" }
+    }
+
+    private fun navigate(place: String): String? {
+        if (place.isBlank()) return "कहाँ जाना है?"
+        return try {
+            open(Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=" + Uri.encode(place)))
+                .setPackage("com.google.android.apps.maps")); null
+        } catch (e: Exception) {
+            try { open(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(place)))); null }
+            catch (e2: Exception) { "नक्शा नहीं खुल पाया" }
+        }
+    }
+
     private fun openApp(spoken: String): String? {
         if (spoken.isBlank()) return "कौन सा ऐप खोलूँ?"
         val key = spoken.lowercase(Locale.ROOT).trim()
@@ -203,6 +247,13 @@ class CommandHandler(private val c: Context) {
     private fun sms(name: String, body: String): String? {
         if (!granted(SEND_SMS)) return "SMS की अनुमति नहीं है"
         if (body.isBlank()) return "क्या मैसेज भेजूँ?"
+        val num = findNumber(name) ?: return "$name का नंबर नहीं मिला"
+        val sm = if (Build.VERSION.SDK_INT >= 31) c.getSystemService(SmsManager::class.java)
+        else @Suppress("DEPRECATION") SmsManager.getDefault()
+        sm.sendTextMessage(num, null, body, null, null)
+        return null
+    }
+}(body.isBlank()) return "क्या मैसेज भेजूँ?"
         val num = findNumber(name) ?: return "$name का नंबर नहीं मिला"
         val sm = if (Build.VERSION.SDK_INT >= 31) c.getSystemService(SmsManager::class.java)
         else @Suppress("DEPRECATION") SmsManager.getDefault()
