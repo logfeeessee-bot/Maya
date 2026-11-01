@@ -303,10 +303,3 @@ class CommandHandler(private val c: Context) {
         return null
     }
 }(body.isBlank()) return "क्या मैसेज भेजूँ?"
-        val num = findNumber(name) ?: return "$name का नंबर नहीं मिला"
-        val sm = if (Build.VERSION.SDK_INT >= 31) c.getSystemService(SmsManager::class.java)
-        else @Suppress("DEPRECATION") SmsManager.getDefault()
-        sm.sendTextMessage(num, null, body, null, null)
-        return null
-    }
-}
