@@ -13,6 +13,8 @@ class MayaAccessibilityService : AccessibilityService() {
 
     companion object { @Volatile var inst: MayaAccessibilityService? = null }
 
+    private val lastNodes = ArrayList<AccessibilityNodeInfo>()
+
     override fun onServiceConnected() { inst = this }
     override fun onUnbind(intent: Intent?): Boolean { inst = null; return super.onUnbind(intent) }
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
@@ -67,5 +69,64 @@ class MayaAccessibilityService : AccessibilityService() {
         val path = Path().apply { if (up) { moveTo(x, a); lineTo(x, b) } else { moveTo(x, b); lineTo(x, a) } }
         dispatchGesture(GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 300)).build(), null, null)
+    }
+
+    // =====================================================================
+    //  Agent ke liye: screen padhna aur number se tap / likhna
+    // =====================================================================
+
+    private fun labelOf(n: AccessibilityNodeInfo, depth: Int = 0): String {
+        val own = (n.text ?: n.contentDescription ?: n.hintText)?.toString()?.trim() ?: ""
+        if (own.isNotEmpty() || depth >= 2) return own
+        val sb = StringBuilder()
+        for (i in 0 until n.childCount) {
+            val c = n.getChild(i) ?: continue
+            val t = labelOf(c, depth + 1)
+            if (t.isNotEmpty()) { if (sb.isNotEmpty()) sb.append(' '); sb.append(t) }
+        }
+        return sb.toString()
+    }
+
+    private fun collect(n: AccessibilityNodeInfo, sb: StringBuilder) {
+        if (lastNodes.size >= 60 || sb.length > 3200) return
+        if (n.isVisibleToUser) {
+            val kind = if (n.isEditable) "edit" else if (n.isClickable) "click" else ""
+            if (kind.isNotEmpty()) {
+                sb.append(lastNodes.size).append('|').append(kind).append('|').append(labelOf(n).take(40)).append('\n')
+                lastNodes.add(n)
+            } else if (n.childCount == 0) {
+                val t = labelOf(n)
+                if (t.isNotEmpty()) sb.append("-|text|").append(t.take(40)).append('\n')
+            }
+        }
+        for (i in 0 until n.childCount) {
+            val c = n.getChild(i) ?: continue
+            collect(c, sb)
+        }
+    }
+
+    /** Screen ke tap/likhne layak hisse "number|kind|naam" ki list mein */
+    fun readScreen(): String {
+        lastNodes.clear()
+        val root = rootInActiveWindow ?: return ""
+        val sb = StringBuilder()
+        collect(root, sb)
+        return sb.toString()
+    }
+
+    fun clickIndex(i: Int): Boolean {
+        val n = lastNodes.getOrNull(i) ?: return false
+        var x: AccessibilityNodeInfo? = n
+        while (x != null && !x.isClickable) x = x.parent
+        return x?.performAction(AccessibilityNodeInfo.ACTION_CLICK) ?: false
+    }
+
+    fun typeIndex(i: Int, txt: String): Boolean {
+        val n = lastNodes.getOrNull(i) ?: inputNode() ?: return false
+        n.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, txt)
+        }
+        return n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 }
