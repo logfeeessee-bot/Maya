@@ -323,4 +323,79 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
         sr?.destroy(); tts?.shutdown(); worker.shutdown()
         super.onDestroy()
     }
+}        handler.post {
+                        if (action == "stop") {
+                            listening = false
+                            say(reply.ifBlank { "ठीक है" })
+                        } else {
+                            val fail = cmd.execute(action, target, body, on)
+                            say(fail ?: reply.ifBlank { "ठीक है" })
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                handler.post {
+                    android.widget.Toast.makeText(this, "Groq galti: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                    localReply(text)
+                }
+            }
+        }
+    }
+
+    // ---------- Agent: screen padhkar kai kadam khud chalana ----------
+    private fun runAgent(key: String, goal: String): String {
+        val done = ArrayList<String>()
+        val lang = Prefs.langName(this)
+        for (step in 1..12) {
+            if (cancel) return "ठीक है, रोक दिया"
+            val svc = MayaAccessibilityService.inst ?: return "पहले Accessibility सेवा चालू कीजिए"
+            Thread.sleep(1200)
+            val screen = svc.readScreen()
+            val j = GroqClient.askAgent(key, goal, screen, done, lang)
+            val a = j.optString("action", "fail")
+            val idx = j.optInt("index", -1)
+            val txt = j.optString("text", "")
+            val tgt = j.optString("target", "")
+            val rep = j.optString("reply", "")
+            when (a) {
+                "done" -> return rep.ifBlank { "काम हो गया" }
+                "fail" -> return rep.ifBlank { "मुझसे यह नहीं हो पाया" }
+                "click" -> done.add(if (svc.clickIndex(idx)) "clicked $idx" else "click $idx failed")
+                "type" -> done.add(if (svc.typeIndex(idx, txt)) "typed '$txt'" else "typing failed")
+                "enter" -> done.add(if (svc.pressEnter()) "pressed enter" else "enter failed")
+                "scroll_down" -> { svc.swipe(true); done.add("scrolled down") }
+                "scroll_up" -> { svc.swipe(false); done.add("scrolled up") }
+                "back" -> { svc.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK); done.add("went back") }
+                "home" -> { svc.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME); done.add("went home") }
+                "open_app" -> { val f = cmd.execute("open_app", tgt, "", true); done.add(if (f == null) "opened $tgt" else "could not open $tgt") }
+                else -> done.add("unknown action")
+            }
+        }
+        return "बहुत कदम हो गए, काम पूरा नहीं हो पाया"
+    }
+
+    private fun localReply(text: String) {
+        val r = cmd.handle(text)
+        if (r == CommandHandler.STOP) { listening = false; say("ठीक है") } else say(r)
+    }
+
+    // ---------- Bolna ----------
+    private fun say(text: String) {
+        sr?.destroy(); sr = null
+        setState(2)
+        if (ttsReady) tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "maya")
+        else afterSpeech()
+    }
+
+    private fun afterSpeech() {
+        if (listening) { setState(1); recognize() }
+        else { hideOrb(); setState(0) }
+    }
+
+    override fun onDestroy() {
+        hideOrb()
+        glow?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        sr?.destroy(); tts?.shutdown(); worker.shutdown()
+        super.onDestroy()
+    }
 }
