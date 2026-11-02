@@ -23,15 +23,26 @@ object GroqClient {
     private const val SYSTEM = """You are Maya, a friendly voice assistant that controls an Android phone.
 Always answer ONLY with one JSON object, nothing else:
 {"action":"...","target":"...","text":"...","on":true,"reply":"..."}
-action must be one of: chat, open_app, call, sms, torch, volume_up, volume_down, back, home, recents, notifications, screenshot, lock, scroll_down, scroll_up, click_text, wifi, bluetooth, settings, time, youtube_search, web_search, navigate, type_text, press_enter, unclear, stop.
+action must be one of: chat, open_app, call, sms, torch, volume_up, volume_down, back, home, recents, notifications, screenshot, lock, scroll_down, scroll_up, click_text, wifi, bluetooth, settings, time, youtube_search, web_search, navigate, type_text, press_enter, agent, unclear, stop.
 target = app name, contact name, or text on the screen to tap. For youtube_search and web_search, target = the search words only. For navigate, target = the place name.
+For call and sms, write the contact name in target using Latin letters (transliterate Hindi names, for example the Hindi spelling of Rahul becomes Rahul).
 text = the SMS message body, or the words to type for type_text. on = true/false for the torch.
-If the user says several things in one sentence, pick the one action that does the whole job. Example: "open YouTube and search tiki tiki song" is youtube_search with target "tiki tiki song".
+Use action agent when the job needs several steps inside an app or on the screen, for example open Instagram and search for something, or open Settings and turn something on. For agent, target = the whole goal written as one clear sentence.
+For YouTube searches always use youtube_search, not agent.
 reply = one short natural sentence to speak aloud, in the language the user speaks, with no emoji and no symbols.
 The user speaks Hindi, English or Hinglish (Hindi words in Roman letters). Speech recognition can make small mistakes, so guess the most likely meaning.
-If the words are really meaningless or you cannot tell what the user wants, use action "unclear" and politely ask them to repeat, for example in Hindi: माफ़ कीजिए, मुझे आपकी आवाज़ समझ नहीं आई, कृपया फिर से बोलिए.
-For normal questions or chat use action "chat" and put the answer in reply (max 3 short sentences).
-Use "stop" if the user asks you to stop, sleep or be quiet."""
+If the words are really meaningless or you cannot tell what the user wants, use action unclear and politely ask them to repeat, for example in Hindi: माफ़ कीजिए, मुझे आपकी आवाज़ समझ नहीं आई, कृपया फिर से बोलिए.
+For normal questions or chat use action chat and put the answer in reply (max 3 short sentences).
+Use stop if the user asks you to stop, sleep or be quiet."""
+
+    private const val AGENT = """You control the screen of an Android phone for the user and finish one goal step by step.
+You get the current screen as lines in the form index|kind|label. kind click or edit can be used by its index. Lines with index - and kind text are only for reading.
+Reply ONLY with one JSON object:
+{"action":"click","index":0,"text":"","target":"","reply":""}
+action must be one of: click, type, enter, scroll_down, scroll_up, back, home, open_app, done, fail.
+click = tap the element with that index. type = write text into the edit element with that index. enter = press the search or enter key. open_app = target is the app name. done = the goal is finished and reply is one short sentence in the user's language about what was done. fail = it cannot be done and reply is a short reason in the user's language.
+Do exactly ONE step at a time. If the last step changed nothing, try a different way. If you need to type but no edit box is visible, click the search icon or search bar first.
+Never make payments, purchases or money transfers and never delete data. Use fail for those."""
 
     private fun http(key: String, method: String, path: String, body: JSONObject?): Pair<Int, String> {
         val con = (URL(BASE + path).openConnection() as HttpURLConnection).apply {
@@ -61,13 +72,8 @@ Use "stop" if the user asks you to stop, sleep or be quiet."""
             ?: throw Exception("koi model nahi mila")
     }
 
-    fun ask(key: String, text: String, lang: String): JSONObject {
-        val msgs = JSONArray()
-        msgs.put(JSONObject().put("role", "system")
-            .put("content", SYSTEM + "\nThe user's chosen language: $lang. Reply in the language the user speaks."))
-        history.takeLast(8).forEach { msgs.put(JSONObject().put("role", it.first).put("content", it.second)) }
-        msgs.put(JSONObject().put("role", "user").put("content", text))
-
+    /** Groq ko messages bhejta hai aur jawab ka text wapas deta hai */
+    private fun chat(key: String, msgs: JSONArray): String {
         var useJson = true
         var lastErr = "unknown"
         repeat(3) {
@@ -80,16 +86,8 @@ Use "stop" if the user asks you to stop, sleep or be quiet."""
 
             val (code, resp) = http(key, "POST", "/chat/completions", body)
             if (code in 200..299) {
-                val content = JSONObject(resp).getJSONArray("choices").getJSONObject(0)
+                return JSONObject(resp).getJSONArray("choices").getJSONObject(0)
                     .getJSONObject("message").getString("content")
-                val s = content.indexOf('{')
-                val e = content.lastIndexOf('}')
-                val out = if (s >= 0 && e > s) JSONObject(content.substring(s, e + 1))
-                else JSONObject().put("action", "chat").put("reply", content.trim())
-                history.add("user" to text)
-                history.add("assistant" to out.toString())
-                while (history.size > 16) history.removeAt(0)
-                return out
             }
             lastErr = "HTTP $code ${resp.take(100)}"
             when (code) {
@@ -99,5 +97,39 @@ Use "stop" if the user asks you to stop, sleep or be quiet."""
             }
         }
         throw Exception(lastErr)
+    }
+
+    private fun parse(content: String): JSONObject {
+        val s = content.indexOf('{')
+        val e = content.lastIndexOf('}')
+        return if (s >= 0 && e > s) JSONObject(content.substring(s, e + 1))
+        else JSONObject().put("action", "chat").put("reply", content.trim())
+    }
+
+    /** Aam awaaz command */
+    fun ask(key: String, text: String, lang: String): JSONObject {
+        val msgs = JSONArray()
+        msgs.put(JSONObject().put("role", "system")
+            .put("content", SYSTEM + "\nThe user's chosen language: $lang. Reply in the language the user speaks."))
+        history.takeLast(8).forEach { msgs.put(JSONObject().put("role", it.first).put("content", it.second)) }
+        msgs.put(JSONObject().put("role", "user").put("content", text))
+
+        val content = chat(key, msgs)
+        val out = parse(content)
+        history.add("user" to text)
+        history.add("assistant" to out.toString())
+        while (history.size > 16) history.removeAt(0)
+        return out
+    }
+
+    /** Screen padhkar agla ek kadam batata hai (agent) */
+    fun askAgent(key: String, goal: String, screen: String, done: List<String>, lang: String): JSONObject {
+        val msgs = JSONArray()
+        msgs.put(JSONObject().put("role", "system")
+            .put("content", AGENT + "\nThe user's language: $lang."))
+        val steps = if (done.isEmpty()) "none" else done.takeLast(8).joinToString("; ")
+        msgs.put(JSONObject().put("role", "user")
+            .put("content", "Goal: $goal\nSteps already done: $steps\nCurrent screen:\n" + screen.take(3500)))
+        return parse(chat(key, msgs))
     }
 }
