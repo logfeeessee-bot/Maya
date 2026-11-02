@@ -50,6 +50,7 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
     private var orbX = 0
     private var orbY = 0
     private var lastSorry = 0L
+    @Volatile private var cancel = false
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -170,6 +171,7 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
 
     private fun startListening() {
         listening = true
+        cancel = false
         applyTtsLanguage()
         ensureGlow()
         glow?.color = Prefs.ring(this)
@@ -180,6 +182,7 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
 
     private fun stopListening() {
         listening = false
+        cancel = true
         sr?.destroy(); sr = null
         tts?.stop()
         hideOrb()
@@ -239,13 +242,20 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
                 val body = j.optString("text", "")
                 val on = j.optBoolean("on", true)
                 val reply = j.optString("reply", "")
-                handler.post {
-                    if (action == "stop") {
-                        listening = false
-                        say(reply.ifBlank { "ठीक है" })
-                    } else {
-                        val fail = cmd.execute(action, target, body, on)
-                        say(fail ?: reply.ifBlank { "ठीक है" })
+                if (action == "agent") {
+                    handler.post { sr?.destroy(); sr = null; setState(2) }
+                    cancel = false
+                    val result = runAgent(key, target.ifBlank { text })
+                    handler.post { say(result) }
+                } else {
+                    handler.post {
+                        if (action == "stop") {
+                            listening = false
+                            say(reply.ifBlank { "ठीक है" })
+                        } else {
+                            val fail = cmd.execute(action, target, body, on)
+                            say(fail ?: reply.ifBlank { "ठीक है" })
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -255,6 +265,38 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
                 }
             }
         }
+    }
+
+    // ---------- Agent: screen padhkar kai kadam khud chalana ----------
+    private fun runAgent(key: String, goal: String): String {
+        val done = ArrayList<String>()
+        val lang = Prefs.langName(this)
+        for (step in 1..12) {
+            if (cancel) return "ठीक है, रोक दिया"
+            val svc = MayaAccessibilityService.inst ?: return "पहले Accessibility सेवा चालू कीजिए"
+            Thread.sleep(1200)
+            val screen = svc.readScreen()
+            val j = GroqClient.askAgent(key, goal, screen, done, lang)
+            val a = j.optString("action", "fail")
+            val idx = j.optInt("index", -1)
+            val txt = j.optString("text", "")
+            val tgt = j.optString("target", "")
+            val rep = j.optString("reply", "")
+            when (a) {
+                "done" -> return rep.ifBlank { "काम हो गया" }
+                "fail" -> return rep.ifBlank { "मुझसे यह नहीं हो पाया" }
+                "click" -> done.add(if (svc.clickIndex(idx)) "clicked $idx" else "click $idx failed")
+                "type" -> done.add(if (svc.typeIndex(idx, txt)) "typed '$txt'" else "typing failed")
+                "enter" -> done.add(if (svc.pressEnter()) "pressed enter" else "enter failed")
+                "scroll_down" -> { svc.swipe(true); done.add("scrolled down") }
+                "scroll_up" -> { svc.swipe(false); done.add("scrolled up") }
+                "back" -> { svc.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK); done.add("went back") }
+                "home" -> { svc.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME); done.add("went home") }
+                "open_app" -> { val f = cmd.execute("open_app", tgt, "", true); done.add(if (f == null) "opened $tgt" else "could not open $tgt") }
+                else -> done.add("unknown action")
+            }
+        }
+        return "बहुत कदम हो गए, काम पूरा नहीं हो पाया"
     }
 
     private fun localReply(text: String) {
