@@ -432,4 +432,193 @@ class MayaService : Service(), TextToSpeech.OnInitListener {
         sr?.destroy(); tts?.shutdown(); worker.shutdown(); ear.shutdown()
         super.onDestroy()
     }
+}     override fun onPartialResults(b: Bundle?) {}
+                    override fun onEvent(t: Int, b: Bundle?) {}
+                })
+                r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE, Prefs.lang(this))
+                    .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, isOffline())
+                    .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L))
+            }
+        }
+    }
+
+    private fun isOffline() = System.currentTimeMillis() < offlineUntil
+
+    private fun toast(msg: String) =
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
+
+    // Mic bar-bar band-chalu na ho: dheere-dheere ruk kar koshish, bahut baar fail ho to mic band
+    private fun retryLater() {
+        failStreak++
+        if (failStreak >= 8) {
+            toast("आवाज़ सुनना नहीं हो पा रहा, माइक बंद कर दिया")
+            stopListening()
+            return
+        }
+        val wait = minOf(1200L * (1 shl minOf(failStreak - 1, 3)), 10000L)
+        handler.postDelayed({ recognize() }, wait)
+    }
+
+    private fun languageMissing() {
+        listening = false
+        say("ऑफ़लाइन में यह भाषा उपलब्ध नहीं है। फ़ोन में Google की ऑफ़लाइन भाषा डाउनलोड कीजिए, या इंटरनेट चालू कीजिए।")
+    }
+
+    // ---------- Whisper: har bhasha pehchanna ----------
+    private fun recognizeWhisper() {
+        if (!listening) return
+        val w = WhisperListener(Prefs.key(this))
+        whisper = w
+        val lang = if (Prefs.autoLang(this)) null else Prefs.lang(this).substringBefore('-')
+        ear.execute {
+            try {
+                val t = w.listenOnce(lang)
+                handler.post {
+                    if (!listening || whisper !== w) return@post
+                    if (t.isNullOrBlank()) recognize() else think(t)
+                }
+            } catch (e: Exception) {
+                handler.post {
+                    if (whisper !== w) return@post
+                    android.widget.Toast.makeText(this, "Whisper galti: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                    if (listening) handler.postDelayed({ recognize() }, 2000)
+                }
+            }
+        }
+    }
+
+    // Jawab jis lipi mein hai usi ki awaaz chunta hai (sirf Whisper + auto bhasha mein)
+    private fun voiceLangFor(text: String): String {
+        val base = Prefs.lang(this)
+        if (!(Prefs.whisper(this) && Prefs.autoLang(this))) return base
+        for (ch in text) {
+            val c = ch.code
+            when {
+                c in 0x0900..0x097F -> return if (base == "mr-IN" || base == "ne-NP") base else "hi-IN"
+                c in 0x0980..0x09FF -> return "bn-IN"
+                c in 0x0A00..0x0A7F -> return "pa-IN"
+                c in 0x0A80..0x0AFF -> return "gu-IN"
+                c in 0x0B80..0x0BFF -> return "ta-IN"
+                c in 0x0C00..0x0C7F -> return "te-IN"
+                c in 0x0C80..0x0CFF -> return "kn-IN"
+                c in 0x0D00..0x0D7F -> return "ml-IN"
+                c in 0x0600..0x06FF -> return if (base == "ar-SA") base else "ur-IN"
+                c in 0x0400..0x04FF -> return "ru-RU"
+                c in 0x0E00..0x0E7F -> return "th-TH"
+                c in 0x3040..0x30FF -> return "ja-JP"
+                c in 0xAC00..0xD7AF -> return "ko-KR"
+                c in 0x4E00..0x9FFF -> return "zh-CN"
+            }
+        }
+        val latin = listOf("en-IN", "es-ES", "fr-FR", "de-DE", "pt-BR", "it-IT", "tr-TR", "id-ID", "vi-VN", "nl-NL", "pl-PL", "sw-KE")
+        return if (base in latin) base else "en-IN"
+    }
+
+    // ---------- Soch (Groq AI) ----------
+    private fun think(text: String) {
+        val key = Prefs.key(this)
+        if (key.isBlank() || isOffline()) { localReply(text); return }
+        worker.execute {
+            try {
+                val j = GroqClient.ask(key, text, Prefs.langName(this))
+                offlineUntil = 0L
+                toldOffline = false
+                val action = j.optString("action", "chat")
+                val target = j.optString("target", "")
+                val body = j.optString("text", "")
+                val on = j.optBoolean("on", true)
+                val reply = j.optString("reply", "")
+                if (action == "agent") {
+                    handler.post { sr?.destroy(); sr = null; setState(2) }
+                    cancel = false
+                    val result = runAgent(key, target.ifBlank { text })
+                    handler.post { say(result) }
+                } else {
+                    handler.post {
+                        if (action == "stop") {
+                            listening = false
+                            say(reply.ifBlank { "ठीक है" })
+                        } else {
+                            val fail = cmd.execute(action, target, body, on)
+                            say(fail ?: reply.ifBlank { "ठीक है" })
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                val net = e is java.io.IOException
+                if (net) offlineUntil = System.currentTimeMillis() + 45000
+                handler.post {
+                    if (net) {
+                        if (!toldOffline) { toldOffline = true; toast("इंटरनेट नहीं है, ऑफ़लाइन मोड चालू") }
+                    } else {
+                        toast("Groq galti: ${e.message}")
+                    }
+                    localReply(text)
+                }
+            }
+        }
+    }
+
+    // ---------- Agent: screen padhkar kai kadam khud chalana ----------
+    private fun runAgent(key: String, goal: String): String {
+        val done = ArrayList<String>()
+        val lang = Prefs.langName(this)
+        for (step in 1..12) {
+            if (cancel) return "ठीक है, रोक दिया"
+            val svc = MayaAccessibilityService.inst ?: return "पहले Accessibility सेवा चालू कीजिए"
+            Thread.sleep(1200)
+            val screen = svc.readScreen()
+            val j = GroqClient.askAgent(key, goal, screen, done, lang)
+            val a = j.optString("action", "fail")
+            val idx = j.optInt("index", -1)
+            val txt = j.optString("text", "")
+            val tgt = j.optString("target", "")
+            val rep = j.optString("reply", "")
+            when (a) {
+                "done" -> return rep.ifBlank { "काम हो गया" }
+                "fail" -> return rep.ifBlank { "मुझसे यह नहीं हो पाया" }
+                "click" -> done.add(if (svc.clickIndex(idx)) "clicked $idx" else "click $idx failed")
+                "type" -> done.add(if (svc.typeIndex(idx, txt)) "typed '$txt'" else "typing failed")
+                "enter" -> done.add(if (svc.pressEnter()) "pressed enter" else "enter failed")
+                "scroll_down" -> { svc.swipe(true); done.add("scrolled down") }
+                "scroll_up" -> { svc.swipe(false); done.add("scrolled up") }
+                "back" -> { svc.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK); done.add("went back") }
+                "home" -> { svc.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME); done.add("went home") }
+                "open_app" -> { val f = cmd.execute("open_app", tgt, "", true); done.add(if (f == null) "opened $tgt" else "could not open $tgt") }
+                else -> done.add("unknown action")
+            }
+        }
+        return "बहुत कदम हो गए, काम पूरा नहीं हो पाया"
+    }
+
+    private fun localReply(text: String) {
+        val r = cmd.handle(text)
+        if (r == CommandHandler.STOP) { listening = false; say("ठीक है") } else say(r)
+    }
+
+    // ---------- Bolna ----------
+    private fun say(text: String) {
+        sr?.destroy(); sr = null
+        whisper?.stop(); whisper = null
+        setState(2)
+        if (ttsReady) {
+            tts?.language = Locale.forLanguageTag(voiceLangFor(text))
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "maya")
+        } else afterSpeech()
+    }
+
+    private fun afterSpeech() {
+        if (listening) { setState(1); recognize() }
+        else { hideOrb(); setState(0) }
+    }
+
+    override fun onDestroy() {
+        hideOrb()
+        glow?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        whisper?.stop()
+        sr?.destroy(); tts?.shutdown(); worker.shutdown(); ear.shutdown()
+        super.onDestroy()
+    }
 }
