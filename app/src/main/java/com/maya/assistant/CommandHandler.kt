@@ -1,4 +1,4 @@
-package com.maya.assistant
+hipackage com.maya.assistant
 
 import android.Manifest.permission.CALL_PHONE
 import android.Manifest.permission.READ_CONTACTS
@@ -390,4 +390,109 @@ class CommandHandler(private val c: Context) {
                 .setPackage("com.google.android.apps.maps")); null
         } catch (e: Exception) {
             try { open(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(place)))); null }
-            catch (e2: Exception) { "नक्शा नहीं खुल पाया
+            catch (e2: Exception) { "नक्शा नहीं खुल पायापाया" }
+        }
+    }
+
+    // ---------- milte-julte naam pehchanna (offline) ----------
+    /** Do naamon mein kitna farak hai (kam = zyada milte-julte) */
+    private fun lev(a: String, b: String): Int {
+        val d = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            var prev = d[0]
+            d[0] = i
+            for (j in 1..b.length) {
+                val tmp = d[j]
+                d[j] = minOf(d[j] + 1, d[j - 1] + 1, prev + if (a[i - 1] == b[j - 1]) 0 else 1)
+                prev = tmp
+            }
+        }
+        return d[b.length]
+    }
+
+    /** Naam ka "dhaancha": Hindi ko English banao, swar hatao (Rahul / राहुल / Rahool sab "rl") */
+    private fun skel(s: String): String {
+        val t = Translit.to(s).lowercase(Locale.ROOT)
+            .replace('w', 'v').replace("ph", "f").replace("ck", "k").replace('q', 'k').replace('z', 'j')
+        val sb = StringBuilder()
+        for (ch in t) {
+            if (!ch.isLetter()) continue
+            if ("aeiouhy".indexOf(ch) >= 0) continue
+            if (sb.isNotEmpty() && sb[sb.length - 1] == ch) continue
+            sb.append(ch)
+        }
+        return sb.toString()
+    }
+
+    private fun okDist(d: Int, len: Int) = d == 0 || (d <= 1 && len >= 4) || (d <= 2 && len >= 7)
+
+    private fun openApp(spoken: String): String? {
+        if (spoken.isBlank()) return "कौन सा ऐप खोलूँ?"
+        val key = spoken.lowercase(Locale.ROOT).trim()
+        val name = aliases[key] ?: key
+        val pm = c.packageManager
+        val apps = pm.queryIntentActivities(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+        var hit: ResolveInfo? = apps.firstOrNull { it.loadLabel(pm).toString().lowercase().contains(name) }
+        if (hit == null) {
+            val q = skel(name)
+            if (q.length >= 2) {
+                var best: ResolveInfo? = null
+                var bd = Int.MAX_VALUE
+                for (a in apps) {
+                    val d = lev(q, skel(a.loadLabel(pm).toString()))
+                    if (d < bd) { bd = d; best = a }
+                }
+                if (best != null && okDist(bd, q.length)) hit = best
+            }
+        }
+        val found = hit ?: return "$spoken ऐप नहीं मिला"
+        val launch = pm.getLaunchIntentForPackage(found.activityInfo.packageName) ?: return "ऐप नहीं खुल पाया"
+        open(launch)
+        return null
+    }
+
+    private fun findNumber(name: String): String? {
+        if (name.all { it.isDigit() || it == ' ' }) return name.replace(" ", "")
+        if (!granted(READ_CONTACTS)) return null
+        c.contentResolver.query(Phone.CONTENT_URI, arrayOf(Phone.NUMBER),
+            "${Phone.DISPLAY_NAME} LIKE ?", arrayOf("%$name%"), null)?.use {
+            if (it.moveToFirst()) return it.getString(0)
+        }
+        // seedha naam nahi mila: milte-julte naam dhundo (Hindi / English dono)
+        val q = skel(name)
+        if (q.length < 2) return null
+        var best: String? = null
+        var bestD = Int.MAX_VALUE
+        c.contentResolver.query(Phone.CONTENT_URI, arrayOf(Phone.DISPLAY_NAME, Phone.NUMBER),
+            null, null, null)?.use {
+            while (it.moveToNext()) {
+                val full = it.getString(0) ?: ""
+                val num = it.getString(1) ?: continue
+                val first = full.trim().split(" ").firstOrNull() ?: full
+                val dist = minOf(lev(q, skel(full)), lev(q, skel(first)))
+                if (dist < bestD) { bestD = dist; best = num }
+            }
+        }
+        val found = best
+        return if (found != null && okDist(bestD, q.length)) found else null
+    }
+
+    private fun call(name: String): String? {
+        if (name.isBlank()) return "किसे कॉल करूँ?"
+        if (!granted(CALL_PHONE)) return "कॉल की अनुमति नहीं है"
+        val num = findNumber(name) ?: return "$name का नंबर नहीं मिला"
+        open(Intent(Intent.ACTION_CALL, Uri.parse("tel:$num")))
+        return null
+    }
+
+    private fun sms(name: String, body: String): String? {
+        if (!granted(SEND_SMS)) return "SMS की अनुमति नहीं है"
+        if (body.isBlank()) return "क्या मैसेज भेजूँ?"
+        val num = findNumber(name) ?: return "$name का नंबर नहीं मिला"
+        val sm = if (Build.VERSION.SDK_INT >= 31) c.getSystemService(SmsManager::class.java)
+        else @Suppress("DEPRECATION") SmsManager.getDefault()
+        sm.sendTextMessage(num, null, body, null, null)
+        return null
+    }
+}
