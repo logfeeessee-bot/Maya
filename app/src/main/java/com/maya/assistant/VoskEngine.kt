@@ -1,0 +1,263 @@
+package com.maya.assistant
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import org.json.JSONObject
+import org.vosk.Model
+import org.vosk.Recognizer
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.zip.ZipInputStream
+
+/** Offline bhasha-model: ek baar download, phir bina internet ke chalte hain */
+object VoskModels {
+    class Entry(val lang: String, val folder: String)
+
+    private const val BASE = "https://alphacephei.com/vosk/models/"
+
+    val list = listOf(
+        Entry("hi-IN", "vosk-model-small-hi-0.22"),
+        Entry("en-IN", "vosk-model-small-en-in-0.4"),
+        Entry("en-US", "vosk-model-small-en-us-0.15"),
+        Entry("gu-IN", "vosk-model-small-gu-0.42"),
+        Entry("te-IN", "vosk-model-small-te-0.42"),
+        Entry("es-ES", "vosk-model-small-es-0.42"),
+        Entry("fr-FR", "vosk-model-small-fr-0.22"),
+        Entry("de-DE", "vosk-model-small-de-0.15"),
+        Entry("ru-RU", "vosk-model-small-ru-0.22"),
+        Entry("zh-CN", "vosk-model-small-cn-0.22"),
+        Entry("ja-JP", "vosk-model-small-ja-0.22"),
+        Entry("pt-BR", "vosk-model-small-pt-0.3"),
+        Entry("it-IT", "vosk-model-small-it-0.22"),
+        Entry("tr-TR", "vosk-model-small-tr-0.3")
+    )
+
+    fun entry(lang: String): Entry? = list.firstOrNull { it.lang == lang }
+
+    /** Model download ho chuka ho to uska folder, warna null */
+    fun dir(ctx: Context, lang: String): File? {
+        val e = entry(lang) ?: return null
+        val d = File(ctx.filesDir, "vosk/" + e.folder)
+        return if (File(d, "am").isDirectory) d else null
+    }
+
+    // ---- Model ek baar load hokar yaad rehta hai: mic dobara dabane par 3-4 second nahi lagte ----
+    private var cached: Model? = null
+    private var cachedLang: String? = null
+    private var users = 0
+
+    @Synchronized
+    private fun ensure(ctx: Context, lang: String): Model {
+        val c = cached
+        if (c != null && cachedLang == lang) return c
+        if (users > 0) throw Exception("pehle mic band karo, phir bhasha badlo")
+        try { c?.close() } catch (_: Throwable) {}
+        cached = null
+        cachedLang = null
+        val d = dir(ctx, lang) ?: throw Exception("model download nahi hua")
+        val m = Model(d.absolutePath)
+        cached = m
+        cachedLang = lang
+        return m
+    }
+
+    @Synchronized
+    fun acquire(ctx: Context, lang: String): Model {
+        val m = ensure(ctx, lang)
+        users++
+        return m
+    }
+
+    @Synchronized
+    fun release() { if (users > 0) users-- }
+
+    /** Background mein model pehle se taiyaar rakhta hai */
+    fun preload(ctx: Context, lang: String) {
+        val app = ctx.applicationContext
+        Thread { try { ensure(app, lang) } catch (_: Throwable) {} }.start()
+    }
+
+    /** Model download karke kholta hai. Background thread par chalana hai. null = sab theek, warna galti ka text */
+    fun download(ctx: Context, lang: String, status: (String) -> Unit): String? {
+        val e = entry(lang) ?: return "is bhasha ka offline model nahi hai"
+        val root = File(ctx.filesDir, "vosk")
+        root.mkdirs()
+        val zip = File(ctx.cacheDir, e.folder + ".zip")
+        try {
+            val con = URL(BASE + e.folder + ".zip").openConnection() as HttpURLConnection
+            con.connectTimeout = 15000
+            con.readTimeout = 30000
+            if (con.responseCode != 200) return "download fail: HTTP " + con.responseCode
+            val total = con.contentLength.toLong()
+            con.inputStream.use { inp ->
+                zip.outputStream().use { out ->
+                    val b = ByteArray(65536)
+                    var done = 0L
+                    var last = -1
+                    while (true) {
+                        val n = inp.read(b)
+                        if (n < 0) break
+                        out.write(b, 0, n)
+                        done += n
+                        if (total > 0) {
+                            val pct = (done * 100 / total).toInt()
+                            if (pct != last) { last = pct; status("Download $pct%") }
+                        }
+                    }
+                }
+            }
+            status("Model khol rahi hoon...")
+            val canon = root.canonicalPath + File.separator
+            ZipInputStream(zip.inputStream().buffered()).use { zin ->
+                var z = zin.nextEntry
+                while (z != null) {
+                    val f = File(root, z.name)
+                    if (!f.canonicalPath.startsWith(canon)) throw Exception("galat zip")
+                    if (z.isDirectory) {
+                        f.mkdirs()
+                    } else {
+                        f.parentFile?.mkdirs()
+                        f.outputStream().use { out -> zin.copyTo(out) }
+                    }
+                    zin.closeEntry()
+                    z = zin.nextEntry
+                }
+            }
+            zip.delete()
+            return if (dir(ctx, lang) != null) null else "model khulne ke baad bhi nahi mila"
+        } catch (ex: Exception) {
+            zip.delete()
+            return "download fail: " + (ex.message ?: ex.toString())
+        }
+    }
+}
+
+/**
+ * Ek baar mic khulta hai aur chalta rehta hai (Google ka recognizer nahi, isliye tik-tik / jhapakna nahi).
+ * Awaaz phone ke andar hi text banti hai (internet nahi chahiye).
+ * muted = true ho to awaaz fenk di jaati hai (Maya bol rahi ho tab) par mic khula rehta hai.
+ * Dheemi awaaz apne aap badha di jaati hai (6 guna tak), taaki Maya ko baar-baar na bolna pade.
+ * onUtterance diya ho to har baat ke saath uski awaaz (PCM 16 kHz) bhi milti hai (Whisper se behtar sunne ke liye).
+ */
+class VoskEar(
+    private val ctx: Context,
+    private val lang: String,
+    private val onText: (String) -> Unit,
+    private val onError: (String) -> Unit,
+    private val onUtterance: ((String, ByteArray) -> Unit)? = null
+) {
+    @Volatile private var running = false
+    @Volatile var muted = false
+
+    fun start() {
+        if (running) return
+        running = true
+        Thread { loop() }.start()
+    }
+
+    fun stop() { running = false }
+
+    private fun toBytes(c: ShortArray, n: Int): ByteArray {
+        val b = ByteArray(n * 2)
+        for (i in 0 until n) {
+            b[2 * i] = (c[i].toInt() and 0xFF).toByte()
+            b[2 * i + 1] = ((c[i].toInt() shr 8) and 0xFF).toByte()
+        }
+        return b
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun loop() {
+        var rec: Recognizer? = null
+        var ar: AudioRecord? = null
+        var held = false
+        try {
+            val model = VoskModels.acquire(ctx, lang)
+            held = true
+            rec = Recognizer(model, 16000f)
+            val minBuf = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            ar = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16000, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, 16000))
+            if (ar.state != AudioRecord.STATE_INITIALIZED) throw Exception("mic nahi khul paya")
+            ar.startRecording()
+            val buf = ShortArray(2000)               // 0.125 second
+            val utt = ByteArrayOutputStream()
+            var pre: ByteArray? = null
+            var started = false
+            var wasMuted = false
+            var calib = 0
+            var floor = 0.0
+            var thr = 600.0
+            var gain = 1.0
+            while (running) {
+                val n = ar.read(buf, 0, buf.size)
+                if (n <= 0) continue
+                if (muted) {
+                    if (!wasMuted) {
+                        rec.finalResult
+                        wasMuted = true
+                        utt.reset(); started = false; pre = null
+                    }
+                    continue
+                }
+                wasMuted = false
+
+                var sum = 0.0
+                for (i in 0 until n) { val v = buf[i].toDouble(); sum += v * v }
+                val rms = Math.sqrt(sum / n)
+                if (calib < 4) {                       // shuru ke aadhe second se shor ka andaza
+                    floor += rms / 4
+                    calib++
+                    if (calib == 4) thr = maxOf(500.0, floor * 2.5)
+                }
+                val loud = calib >= 4 && rms > thr
+
+                // dheemi awaaz ko badhao (zyada se zyada 6 guna)
+                if (loud) {
+                    val g = (3500.0 / rms).coerceIn(1.0, 6.0)
+                    gain = if (g < gain) g else gain + (g - gain) * 0.6
+                } else {
+                    gain += (1.0 - gain) * 0.1
+                }
+                if (gain > 1.05) {
+                    for (i in 0 until n) buf[i] = (buf[i] * gain).toInt().coerceIn(-32768, 32767).toShort()
+                }
+
+                // Whisper ke liye is baat ki awaaz jama karo
+                if (onUtterance != null) {
+                    val b = toBytes(buf, n)
+                    if (!started) {
+                        if (loud) { started = true; pre?.let { utt.write(it) }; utt.write(b) } else pre = b
+                    } else {
+                        utt.write(b)
+                        if (utt.size() > 16000 * 2 * 30) { utt.reset(); started = false }
+                    }
+                }
+
+                if (rec.acceptWaveForm(buf, n)) {
+                    val t = JSONObject(rec.result).optString("text", "").trim()
+                    val pcm = if (started) utt.toByteArray() else ByteArray(0)
+                    utt.reset(); started = false; pre = null
+                    if (onUtterance != null) {
+                        if (t.isNotEmpty() || pcm.size >= 24000) onUtterance.invoke(t, pcm)
+                    } else if (t.isNotEmpty()) {
+                        onText(t)
+                    }
+                }
+            }
+        } catch (e: Throwable) {
+            if (running) onError(e.message ?: e.toString())
+        } finally {
+            running = false
+            try { ar?.stop() } catch (_: Exception) {}
+            ar?.release()
+            try { rec?.close() } catch (_: Throwable) {}
+            if (held) VoskModels.release()
+        }
+    }
+}
